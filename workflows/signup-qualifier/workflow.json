@@ -1,0 +1,223 @@
+{
+  "name": "looot: score new signups against your ICP",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Signup qualifier\nPOST {email} from your app's signup hook.\nFree-mail and bad addresses are skipped at $0.\nOtherwise looot enriches the person and the company, and the Score node rates them hot, warm or cold. Edit the ICP block in Score.\nCap: $0.05 per job, $0.10 per signup at most.",
+        "width": 420,
+        "height": 300
+      },
+      "id": "3961de76-f64e-446c-ad5d-315bbb6b44d9",
+      "name": "Read me",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -260
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "looot/signup",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "d3e74e56-d2e4-4434-acb8-9039bec5f27e",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        100
+      ],
+      "webhookId": "c9d1a23b-2205-440b-a8e7-0ccdf34682a3"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Check email\". Skips free-mail and malformed addresses at $0; otherwise asks looot\n// for the person and the company behind a work email (two items, one HTTP node).\n// Body: {\"email\": \"jane@example.com\"} plus anything else your app sends (kept in the answer).\nconst MAX_COST_PER_CALL = 0.05;\nconst MAX_ATTEMPTS = 3;\nconst FREE_MAIL = [\"gmail.com\", \"googlemail.com\", \"yahoo.com\", \"hotmail.com\", \"outlook.com\", \"live.com\", \"icloud.com\", \"me.com\", \"aol.com\", \"proton.me\", \"protonmail.com\", \"gmx.com\", \"gmx.de\", \"web.de\", \"mail.com\", \"yandex.com\", \"orange.fr\", \"free.fr\"];\n\nconst body = $input.first().json.body ?? $input.first().json;\nconst email = String(body.email ?? \"\").trim().toLowerCase();\nif (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) {\n  return [{ json: { next: \"respond\", response: { ok: false, tier: \"skip\", reason: \"not an email address\", cost_usd: 0 } } }];\n}\nconst domain = email.split(\"@\")[1];\nif (FREE_MAIL.includes(domain)) {\n  return [{ json: { next: \"respond\", response: { ok: true, email, tier: \"skip\", reason: \"free mail domain, nothing to look up\", cost_usd: 0 } } }];\n}\nconst fallback = { enabled: true, maxAttempts: MAX_ATTEMPTS, maxCostUsd: MAX_COST_PER_CALL };\nreturn [\n  { json: { next: \"run\", job: \"people.enrich.by-email\", email, signup: body, request: { endpointId: \"job:people.enrich.by-email\", input: { email }, idempotencyKey: \"n8n-signup-person:\" + email, fallback } } },\n  { json: { next: \"run\", job: \"company.enrich\", email, signup: body, request: { endpointId: \"job:company.enrich\", input: { domain }, idempotencyKey: \"n8n-signup-company:\" + domain, fallback } } },\n];\n"
+      },
+      "id": "5038e5e2-5e1d-462e-ac80-ba3810d0caf1",
+      "name": "Check email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "e429bba1-b1c4-40e4-ac77-7736d2457d19",
+              "leftValue": "={{ $json.next }}",
+              "rightValue": "run",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "811c4fea-1663-4a28-a1bc-23dee2dcb445",
+      "name": "Work email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        440,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.looot.ai/v1/runs",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "wait",
+              "value": "60"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.request) }}",
+        "options": {
+          "timeout": 75000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "831dcfec-2790-44ca-a4f5-9131d2bc790f",
+      "name": "Enrich (looot)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "looot API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Score against ICP\". Edit the ICP block to match who you sell to.\nconst ICP = {\n  minEmployees: 20,\n  maxEmployees: 2000,\n  industries: [\"software\", \"saas\", \"internet\", \"information technology\", \"marketing\", \"financial services\"],\n  countries: [\"us\", \"united states\", \"gb\", \"united kingdom\", \"fr\", \"france\", \"de\", \"germany\"],\n  seniorTitles: [\"founder\", \"ceo\", \"cto\", \"coo\", \"chief\", \"head\", \"vp\", \"vice president\", \"director\", \"owner\", \"partner\"],\n  hot: 70,\n  warm: 40,\n};\n\nconst runs = $input.all().map((i) => i.json);\nconst reqs = $(\"Check email\").all().map((i) => i.json);\nfunction squash(k) { return String(k).toLowerCase().replace(/[\\s_\\-.]/g, \"\"); }\nfunction find(src, keys, depth = 0) {\n  if (!src || typeof src !== \"object\" || depth > 4) return \"\";\n  if (Array.isArray(src)) {\n    for (const x of src.slice(0, 5)) { const v = find(x, keys, depth + 1); if (v) return v; }\n    return \"\";\n  }\n  for (const key of keys) {\n    for (const [k, v] of Object.entries(src)) {\n      if (squash(k) === squash(key) && (typeof v === \"string\" || typeof v === \"number\") && String(v).trim()) return String(v).trim();\n    }\n  }\n  for (const v of Object.values(src)) { const r = find(v, keys, depth + 1); if (r) return r; }\n  return \"\";\n}\n\nconst person = {};\nconst company = {};\nlet cost = 0;\nruns.forEach((run, i) => {\n  cost += typeof run.actualCost === \"number\" ? run.actualCost : 0;\n  if (run.status !== \"completed\") return;\n  const src = { n: (run.normalized && run.normalized.fields) || {}, r: run.result };\n  if (reqs[i].job === \"people.enrich.by-email\") {\n    person.name = find(src, [\"full_name\", \"name\"]);\n    person.title = find(src, [\"title\", \"job_title\", \"jobTitle\", \"headline\", \"position\"]);\n    person.linkedin = find(src, [\"linkedin_url\", \"linkedinUrl\", \"linkedin\"]);\n  } else {\n    company.name = find(src, [\"name\", \"company_name\", \"display_name\"]);\n    company.industry = find(src, [\"industry\", \"category\", \"sector\"]);\n    company.employees = find(src, [\"employees\", \"employee_count\", \"employeeCount\", \"headcount\", \"size\"]);\n    company.country = find(src, [\"country\", \"country_code\", \"hq_country\"]);\n  }\n});\n\nlet score = 0;\nconst reasons = [];\nconst employees = parseInt(String(company.employees || \"\").replace(/[^0-9]/g, \"\"), 10);\nif (Number.isFinite(employees)) {\n  if (employees >= ICP.minEmployees && employees <= ICP.maxEmployees) { score += 40; reasons.push(`${employees} employees, inside ${ICP.minEmployees}-${ICP.maxEmployees}`); }\n  else reasons.push(`${employees} employees, outside ${ICP.minEmployees}-${ICP.maxEmployees}`);\n} else reasons.push(\"company size unknown\");\nconst industry = String(company.industry || \"\").toLowerCase();\nif (industry && ICP.industries.some((x) => industry.includes(x))) { score += 30; reasons.push(`industry: ${company.industry}`); }\nelse if (industry) reasons.push(`industry not in ICP: ${company.industry}`);\nconst country = String(company.country || \"\").toLowerCase();\nif (country && ICP.countries.includes(country)) { score += 15; reasons.push(`country: ${company.country}`); }\nconst title = String(person.title || \"\").toLowerCase();\nif (title && ICP.seniorTitles.some((x) => title.includes(x))) { score += 15; reasons.push(`senior title: ${person.title}`); }\nelse if (title) reasons.push(`title: ${person.title}`);\n\nconst tier = score >= ICP.hot ? \"hot\" : score >= ICP.warm ? \"warm\" : \"cold\";\nreturn [{ json: { response: { ok: true, email: reqs[0].email, tier, score, reasons, person, company, signup: reqs[0].signup, cost_usd: Number(cost.toFixed(6)) } } }];\n"
+      },
+      "id": "344f9d04-8a51-48a4-ada9-e3d480cc2326",
+      "name": "Score against ICP",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.response) }}",
+        "options": {}
+      },
+      "id": "8e314844-8891-40da-ad55-30375e3c40bd",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1100,
+        100
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Check email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check email": {
+      "main": [
+        [
+          {
+            "node": "Work email?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Work email?": {
+      "main": [
+        [
+          {
+            "node": "Enrich (looot)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enrich (looot)": {
+      "main": [
+        [
+          {
+            "node": "Score against ICP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score against ICP": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

@@ -1,0 +1,16 @@
+# looot-n8n-workflows
+
+> Importable n8n workflows for GTM data, built only on core n8n nodes: work email waterfall with verification, company research card, signup qualifier with ICP score, daily Google rank check. Built on the looot API.
+
+looot is one key and one prepaid balance for 2,500+ data API endpoints from 90+ providers. Each job run falls back across providers within a cost cap; a failed call costs $0.
+
+## Use
+
+- Download workflows/<name>/workflow.json from https://github.com/loootai/looot-n8n-workflows and import it in n8n.
+- Credential: Header Auth named "looot API", Authorization = Bearer <looot token>.
+
+## Links
+
+- Docs: https://docs.looot.ai
+- n8n community node: https://github.com/loootai/n8n-nodes-looot
+- GTM tools list: https://github.com/loootai/awesome-gtm

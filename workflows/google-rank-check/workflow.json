@@ -1,0 +1,172 @@
+{
+  "name": "looot: daily Google rank check",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Daily Google rank check\nEdit DOMAIN and KEYWORDS in the Keywords node.\nEach keyword is one Google results page through looot's serper-search endpoint, $0.001 per keyword.\nAdd a Google Sheets or Slack node after Find positions to keep the results.",
+        "width": 420,
+        "height": 300
+      },
+      "id": "deb11319-0603-40f9-ab4f-c069fb1460a2",
+      "name": "Read me",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -280
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "triggerAtHour": 7
+            }
+          ]
+        }
+      },
+      "id": "9bb9cc4d-0390-4106-abba-629c9c7eff81",
+      "name": "Every day at 7",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "c8d5ff7f-e360-472f-a6e2-4533c47f8586",
+      "name": "Run now",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Keywords\". Edit DOMAIN and KEYWORDS. One item per keyword, one Google results page each.\nconst DOMAIN = \"example.com\";\nconst KEYWORDS = [\"example keyword one\", \"example keyword two\"];\nconst GL = \"us\"; // country\nconst HL = \"en\"; // language\n\nconst day = new Date().toISOString().slice(0, 10);\nreturn KEYWORDS.map((q) => ({\n  json: {\n    keyword: q,\n    domain: DOMAIN,\n    request: {\n      // serper-search is one pinned endpoint ($0.001 per call) with a known answer shape: organic[] {title, link, position}.\n      endpointId: \"serper-search\",\n      input: { q, gl: GL, hl: HL, num: 10 },\n      // Same keyword, same day: a retry is free. Tomorrow is a new check.\n      idempotencyKey: (\"n8n-rank:\" + day + \":\" + GL + \":\" + q).toLowerCase().slice(0, 180),\n    },\n  },\n}));\n"
+      },
+      "id": "89892fa6-ce88-4960-aae8-3d614c3532c1",
+      "name": "Keywords",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.looot.ai/v1/runs",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "wait",
+              "value": "60"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.request) }}",
+        "options": {
+          "timeout": 75000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "5611bf1b-a118-4347-ac3f-d675ac28e4c8",
+      "name": "Google results (looot)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        100
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "looot API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Find positions\". One output item per keyword: where DOMAIN ranks in the top 10.\nconst runs = $input.all().map((i) => i.json);\nconst reqs = $(\"Keywords\").all().map((i) => i.json);\nconst host = (u) => { try { return new URL(u).hostname.replace(/^www\\./, \"\"); } catch { return \"\"; } };\n\nreturn runs.map((run, i) => {\n  const req = reqs[i];\n  const organic = (run.status === \"completed\" && run.result && Array.isArray(run.result.organic)) ? run.result.organic : [];\n  const hit = organic.find((o) => { const h = host(o.link); return h === req.domain || h.endsWith(\".\" + req.domain); });\n  const first = organic.find((o) => host(o.link) && host(o.link) !== req.domain);\n  return {\n    json: {\n      keyword: req.keyword,\n      domain: req.domain,\n      position: hit ? (hit.position ?? organic.indexOf(hit) + 1) : null,\n      url: hit ? hit.link : null,\n      top_result: first ? first.link : null,\n      status: run.status || (run.error && run.error.code) || \"error\",\n      cost_usd: typeof run.actualCost === \"number\" ? run.actualCost : 0,\n      checked_at: new Date().toISOString(),\n    },\n  };\n});\n"
+      },
+      "id": "845fe50f-9ed2-498e-a3f5-7ff0f5b3c22a",
+      "name": "Find positions",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        100
+      ]
+    }
+  ],
+  "connections": {
+    "Every day at 7": {
+      "main": [
+        [
+          {
+            "node": "Keywords",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run now": {
+      "main": [
+        [
+          {
+            "node": "Keywords",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Keywords": {
+      "main": [
+        [
+          {
+            "node": "Google results (looot)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google results (looot)": {
+      "main": [
+        [
+          {
+            "node": "Find positions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

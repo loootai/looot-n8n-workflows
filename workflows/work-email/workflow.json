@@ -1,0 +1,350 @@
+{
+  "name": "looot: work email waterfall with verification",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Work email waterfall\nPOST {first_name, last_name, domain} to the webhook.\nlooot tries up to 3 email finders for the same job, then checks the address.\nCap: $0.05 per lookup. A miss or a failed call costs $0.\nCredential: Header Auth named \"looot API\", Authorization = Bearer <your looot token>.",
+        "width": 420,
+        "height": 300
+      },
+      "id": "8cd229b8-99d8-4c6c-a871-bcb853d1d35e",
+      "name": "Read me",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -260
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "looot/work-email",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "7d27b2d9-5da4-4642-ae5c-9c1c4897449a",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        100
+      ],
+      "webhookId": "f34e0065-5d95-4ed9-a8b9-8705e43a89e4"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Build find request\". Reads the webhook body and builds one looot job run.\n// Body: {\"first_name\": \"Ada\", \"last_name\": \"Lovelace\", \"domain\": \"example.com\"}\n// Also accepts \"name\" (full name) and \"website\" or \"url\" for the domain.\nconst MAX_COST_PER_CALL = 0.05; // USD cap for this lookup across every provider tried\nconst MAX_ATTEMPTS = 3;          // providers to try before giving up\n\nconst body = $input.first().json.body ?? $input.first().json;\nconst clean = (v) => (typeof v === \"string\" ? v.trim() : \"\");\nlet first = clean(body.first_name ?? body.firstName);\nlet last = clean(body.last_name ?? body.lastName);\nconst full = clean(body.name ?? body.full_name);\nif (!first && full) {\n  const parts = full.split(/\\s+/);\n  first = parts[0];\n  last = last || parts.slice(1).join(\" \");\n}\nlet domain = clean(body.domain ?? body.website ?? body.url).toLowerCase();\ndomain = domain.replace(/^[a-z]+:\\/\\//, \"\").replace(/^www\\./, \"\").split(/[/?#]/)[0];\n\nif (!first || !last || !domain.includes(\".\") || /[\\s@]/.test(domain)) {\n  return [{ json: { next: \"respond\", response: { ok: false, error: \"Send first_name, last_name and domain (or name and website).\", cost_usd: 0 } } }];\n}\n\nconst input = { first_name: first, last_name: last, domain };\nconst key = [\"n8n-email-find\", domain, first, last].join(\":\").toLowerCase().replace(/[^a-z0-9:._-]/g, \"-\").slice(0, 180);\nreturn [{\n  json: {\n    next: \"find\",\n    lead: input,\n    request: {\n      endpointId: \"job:people.email.find\",\n      input,\n      idempotencyKey: key,\n      fallback: { enabled: true, maxAttempts: MAX_ATTEMPTS, maxCostUsd: MAX_COST_PER_CALL },\n    },\n  },\n}];\n"
+      },
+      "id": "45a0af65-6f58-43ff-a15f-862006b41a01",
+      "name": "Build find request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "79365056-7a23-4e2e-acdf-316231f843e7",
+              "leftValue": "={{ $json.next }}",
+              "rightValue": "find",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "1ed5e072-64c7-4ca5-a25d-2d814f1cc9dc",
+      "name": "Inputs ok?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        440,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.looot.ai/v1/runs",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "wait",
+              "value": "60"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.request) }}",
+        "options": {
+          "timeout": 75000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "d57a31f1-72fa-481b-a5f5-f3dd3ea4e677",
+      "name": "Find email (looot)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "looot API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Build verify request\". Reads the find run; if it found an address, builds the\n// verification run, otherwise answers right away (a miss or a failed call costs $0).\nconst MAX_COST_PER_CALL = 0.05;\nconst MAX_ATTEMPTS = 3;\n\nconst run = $input.first().json;\nconst lead = $(\"Build find request\").first().json.lead;\nconst cost = typeof run.actualCost === \"number\" ? run.actualCost : 0;\n\nfunction findEmail(r) {\n  const re = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}/;\n  const norm = r.normalized && r.normalized.fields && r.normalized.fields.email;\n  if (typeof norm === \"string\" && re.test(norm)) return norm.match(re)[0];\n  const m = JSON.stringify(r.result ?? \"\").match(re);\n  return m ? m[0] : null;\n}\n\nif (!run.status) {\n  const err = run.error || {};\n  return [{ json: { next: \"respond\", response: { ok: false, lead, error: `${err.code || \"error\"}: ${err.message || \"looot refused the call\"}`, top_up_url: run.topUpUrl || null, cost_usd: 0 } } }];\n}\nif (run.status !== \"completed\") {\n  const terminal = [\"failed\", \"blocked\", \"stopped\"].includes(run.status);\n  return [{ json: { next: \"respond\", response: { ok: terminal ? false : true, lead, email: null, status: run.status, run_id: run.runId, note: terminal ? (run.error && run.error.message) || run.status : \"Still running. GET https://api.looot.ai/v1/runs/\" + run.runId + \" later; it is free to read.\", cost_usd: cost } } }];\n}\nconst email = findEmail(run);\nif (!email) {\n  return [{ json: { next: \"respond\", response: { ok: true, lead, email: null, note: \"No provider found an address.\", served_by: run.route && run.route.servedBy || null, cost_usd: cost } } }];\n}\nreturn [{\n  json: {\n    next: \"verify\",\n    lead,\n    email,\n    find_cost: cost,\n    find_served_by: (run.route && run.route.servedBy) || null,\n    request: {\n      endpointId: \"job:people.email.verify\",\n      input: { email },\n      idempotencyKey: (\"n8n-email-verify:\" + email).toLowerCase().slice(0, 180),\n      fallback: { enabled: true, maxAttempts: MAX_ATTEMPTS, maxCostUsd: MAX_COST_PER_CALL },\n    },\n  },\n}];\n"
+      },
+      "id": "9c941bbd-b55f-4074-acaf-12c954691ace",
+      "name": "Build verify request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "eb2923a6-2779-4bca-a4ad-1a575f4f4f40",
+              "leftValue": "={{ $json.next }}",
+              "rightValue": "verify",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "ea396fab-3501-45fc-a4fd-d2b6760f7f44",
+      "name": "Email found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.looot.ai/v1/runs",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "wait",
+              "value": "60"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.request) }}",
+        "options": {
+          "timeout": 75000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "c85f1da6-00f1-46e9-a9e3-9d82bc82ff3c",
+      "name": "Verify email (looot)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        -100
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "looot API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Shape answer\". Combines the found email with its verification status.\nconst run = $input.first().json;\nconst prev = $(\"Build verify request\").first().json;\nconst WORDS = {\n  valid: \"valid\", deliverable: \"valid\", ok: \"valid\", safe: \"valid\", verified: \"valid\",\n  invalid: \"invalid\", undeliverable: \"invalid\", bounce: \"invalid\",\n  catchall: \"catch_all\", catch_all: \"catch_all\", accept_all: \"catch_all\", acceptall: \"catch_all\",\n  risky: \"risky\", unknown: \"unknown\",\n};\nfunction status(r) {\n  const f = (r.normalized && r.normalized.fields) || {};\n  const res = r.result && typeof r.result === \"object\" ? r.result : {};\n  const data = res.data && typeof res.data === \"object\" ? res.data : {};\n  for (const v of [f.status, f.email_status, res.email_status, res.verdict, res.result, res.status, data.status, data.result]) {\n    if (typeof v === \"string\" && v.trim()) return WORDS[v.trim().toLowerCase()] || \"unknown\";\n  }\n  return \"unknown\";\n}\nconst verifyCost = typeof run.actualCost === \"number\" ? run.actualCost : 0;\nreturn [{\n  json: {\n    response: {\n      ok: true,\n      lead: prev.lead,\n      email: prev.email,\n      email_status: run.status === \"completed\" ? status(run) : \"unknown\",\n      verify_run_status: run.status || (run.error && run.error.code) || \"error\",\n      served_by: prev.find_served_by,\n      cost_usd: Number((prev.find_cost + verifyCost).toFixed(6)),\n    },\n  },\n}];\n"
+      },
+      "id": "ef4136b4-bbee-4770-a9f3-80ab511f2df1",
+      "name": "Shape answer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.response) }}",
+        "options": {}
+      },
+      "id": "34999637-cf06-4d0b-a4af-7e3af4d9df46",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1760,
+        100
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Build find request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build find request": {
+      "main": [
+        [
+          {
+            "node": "Inputs ok?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Inputs ok?": {
+      "main": [
+        [
+          {
+            "node": "Find email (looot)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find email (looot)": {
+      "main": [
+        [
+          {
+            "node": "Build verify request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build verify request": {
+      "main": [
+        [
+          {
+            "node": "Email found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email found?": {
+      "main": [
+        [
+          {
+            "node": "Verify email (looot)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify email (looot)": {
+      "main": [
+        [
+          {
+            "node": "Shape answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shape answer": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}
