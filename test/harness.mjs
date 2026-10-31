@@ -5,6 +5,8 @@ export async function runCode(src, { input = [], nodes = {} } = {}) {
     all: () => items.map((json) => ({ json })),
     first: () => ({ json: items[0] }),
     last: () => ({ json: items[items.length - 1] }),
+    // n8n follows paired items back to the source row; the tests pass aligned arrays.
+    itemMatching: (i) => ({ json: items[i] }),
   });
   const $input = wrap(input);
   const $ = (name) => {

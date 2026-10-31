@@ -1,0 +1,283 @@
+{
+  "name": "Turn people who engage with a LinkedIn post into HubSpot contacts with one AI agent and looot",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## LinkedIn post engagers to HubSpot contacts\n\n### How it works\n1. You paste a LinkedIn post URL into a form, for example a competitor's post or your own.\n2. One AI agent reads the post's reactions and comments through looot, picks the people who match your buyer, finds each one's work email and verifies it.\n3. People with a usable email are created or updated in HubSpot with name, title, company and their LinkedIn URL.\n\nThis replaces PhantomBuster for the scraping and Dropcontact for the emails. One looot credential covers reactions, comments, profiles, email finding and verification.\n\n**Cost per post**, from looot's public catalog on 2026-10-31: reactions $0.0015 and comments $0.0015 per page, email find from $0.0036, verify $0.00145. 25 people cost about $0.13. Each call is capped at $0.03 and the agent at 80 steps, so a run can never spend more than $2.40. Model tokens are billed by OpenAI.\n\n### Setup\n- Needs the verified community node **n8n-nodes-looot** (built against 0.1.4): Settings > Community nodes > Install, search `looot`. [Install guide](https://docs.n8n.io/integrations/community-nodes/installation/verified-install/)\n- looot: sign up at [looot.ai](https://looot.ai), top up (from $5), create an agent token under Settings > Agent tokens, then add a **looot API** credential in n8n.\n- A HubSpot private app token credential with contacts write access, and an OpenAI credential.\n- Describe your buyer in the agent's system message (the ICP line).\n- Self-hosted n8n: set `N8N_COMMUNITY_PACKAGES_ALLOW_TOOL_USAGE=true`.\n\n### Customization\nAdd a lemlist or Instantly node after HubSpot to start a sequence. Lower the people count to spend less.",
+        "width": 520,
+        "height": 660
+      },
+      "id": "379dac2d-7fd2-4a76-a49e-25dde4944deb",
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -620,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "formTitle": "Import a LinkedIn post's engagers",
+        "formDescription": "Reads reactions and comments, finds and verifies emails, then writes HubSpot contacts.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "LinkedIn post URL",
+              "placeholder": "https://www.linkedin.com/posts/...",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Max people",
+              "fieldType": "number",
+              "placeholder": "25",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "f5cd9b35-16c9-4a12-a327-dcf79a8beda7",
+      "name": "Post URL form",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "bec6ec3a-5dae-4fcf-ac68-15ddf929f03e"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Post: {{ $json['LinkedIn post URL'] }}\nWork through at most {{ Math.min(Number($json['Max people']) || 10, 25) }} people.",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You turn LinkedIn post engagement into contacts.\nICP: people in sales, marketing or revenue roles at B2B companies. Edit this line for your buyer.\n1. fetchin-post-comments with {\"postUrlOrUrn\": \"<post url>\"}, then fetchin-post-reactions with the same input. Commenters come first.\n2. Keep people whose headline matches the ICP, up to the limit.\n3. For each, find the current company domain (job:linkedin.person.profile with {\"linkedin_url\": \"...\"} when the headline is not enough), then job:people.email.find with {\"first_name\", \"last_name\", \"domain\"}.\n4. Check every address with job:people.email.verify and {\"email\": \"...\"}.\nengagement is comment or reaction. Never invent an email.",
+          "maxIterations": 80,
+          "returnIntermediateSteps": true
+        }
+      },
+      "id": "e029a605-c5c4-4b49-a86c-682b7f0df914",
+      "name": "Engager agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4.1-mini"
+        },
+        "options": {}
+      },
+      "id": "683b2c61-cb6e-4e1b-acd2-f8a90408f0db",
+      "name": "OpenAI chat model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        180,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Runs one looot data call and returns the run: status, result and actualCost. Every call is capped. Use only these ids and inputs:\n- fetchin-post-comments, input {\"postUrlOrUrn\": \"https://www.linkedin.com/posts/...\", \"count\": 100}: commenters with names, headlines and profile URLs.\n- fetchin-post-reactions, input {\"postUrlOrUrn\": \"https://www.linkedin.com/posts/...\", \"count\": 100}: people who reacted.\n- job:linkedin.person.profile, input {\"linkedin_url\": \"...\"}: current company.\n- job:people.email.find, input {\"first_name\": \"...\", \"last_name\": \"...\", \"domain\": \"example.com\"}: work email.\n- job:people.email.verify, input {\"email\": \"...\"}: deliverability.",
+        "operation": "run",
+        "endpointId": "={{ $fromAI('endpointId', 'A looot job or endpoint id from the tool description', 'string') }}",
+        "input": "={{ $fromAI('input', 'The input object, with the field names the tool description gives for that id', 'json') }}",
+        "idempotencyKey": "={{ ('n8n-' + $execution.id + '-' + $fromAI('endpointId', 'A looot job or endpoint id from the tool description', 'string') + '-' + JSON.stringify($fromAI('input', 'The input object, with the field names the tool description gives for that id', 'json'))).slice(0, 200) }}",
+        "fallback": true,
+        "maxCostUsd": 0.03,
+        "wait": 60
+      },
+      "id": "20f82a1a-8ec3-44b8-a9a3-3db59b4a15fe",
+      "name": "looot",
+      "type": "n8n-nodes-looot.loootTool",
+      "typeVersion": 1,
+      "position": [
+        360,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n  \"people\": [\n    {\n      \"first_name\": \"Ada\",\n      \"last_name\": \"Lovelace\",\n      \"headline\": \"VP Marketing at Example\",\n      \"company\": \"Example\",\n      \"company_domain\": \"example.com\",\n      \"linkedin_url\": \"https://www.linkedin.com/in/example\",\n      \"engagement\": \"comment\",\n      \"email\": \"ada@example.com\",\n      \"email_status\": \"valid\"\n    }\n  ]\n}"
+      },
+      "id": "de86ee53-ca16-4e18-a7d2-ba6da56466b6",
+      "name": "People format",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.2,
+      "position": [
+        540,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Contacts with an email\". Keeps people the agent found an address for.\n// Invalid addresses are dropped so HubSpot only gets contacts you can email.\n// Shared helper: adds up what the agent's looot calls cost, from the agent's intermediate steps\n// (the agent's \"Return Intermediate Steps\" option is on). Each looot tool answer carries actualCost.\nfunction agentCost(item) {\n  const steps = (item && Array.isArray(item.intermediateSteps)) ? item.intermediateSteps : [];\n  let usd = 0;\n  let calls = 0;\n  for (const step of steps) {\n    const tool = String((step && step.action && step.action.tool) || \"\");\n    if (!/looot/i.test(tool)) continue;\n    calls += 1;\n    const text = typeof step.observation === \"string\" ? step.observation : JSON.stringify(step.observation ?? \"\");\n    for (const m of text.matchAll(/\"actualCost\"\\s*:\\s*([0-9.eE+-]+)/g)) {\n      const n = Number(m[1]);\n      if (Number.isFinite(n)) usd += n;\n    }\n  }\n  return { looot_calls: calls, looot_cost_usd: Number(usd.toFixed(6)) };\n}\n\nconst item = $input.first().json;\nconst people = (item.output && Array.isArray(item.output.people)) ? item.output.people : [];\nconst cost = agentCost(item);\nconst form = $(\"Post URL form\").first().json;\nreturn people\n  .filter((p) => p && /@/.test(p.email || \"\") && p.email_status !== \"invalid\")\n  .map((p) => ({\n    json: {\n      email: String(p.email).toLowerCase(),\n      first_name: p.first_name || \"\",\n      last_name: p.last_name || \"\",\n      job_title: p.headline || p.title || \"\",\n      company: p.company || \"\",\n      company_domain: p.company_domain || \"\",\n      linkedin_url: p.linkedin_url || \"\",\n      engagement: p.engagement || \"\",\n      email_status: p.email_status || \"unknown\",\n      source_post: form[\"LinkedIn post URL\"] || \"\",\n      run_cost_usd: cost.looot_cost_usd,\n    },\n  }));\n"
+      },
+      "id": "77bdbe3d-cdd7-4484-a185-58c7fe80b7cb",
+      "name": "Contacts with an email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "appToken",
+        "resource": "contact",
+        "operation": "upsert",
+        "email": "={{ $json.email }}",
+        "additionalFields": {
+          "firstName": "={{ $json.first_name }}",
+          "lastName": "={{ $json.last_name }}",
+          "jobTitle": "={{ $json.job_title }}",
+          "companyName": "={{ $json.company }}",
+          "websiteUrl": "={{ $json.company_domain ? 'https://' + $json.company_domain : '' }}"
+        },
+        "options": {}
+      },
+      "id": "b2844873-3750-4cd3-a393-6bdcd758f3f9",
+      "name": "Create or update contact",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2.1,
+      "position": [
+        900,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Which post\nPaste the post URL and a people limit.",
+        "width": 240,
+        "height": 380,
+        "color": 7
+      },
+      "id": "66867ed1-2c40-474b-a906-3c563495332c",
+      "name": "Form section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Engagers to verified emails\nComments, reactions, profiles, email find and verify, all through looot.",
+        "width": 440,
+        "height": 600,
+        "color": 7
+      },
+      "id": "23820b5a-3f08-4799-a7f7-7c0eb3402e33",
+      "name": "Agent section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        200,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Write HubSpot contacts\nOnly people with a usable email. Invalid addresses are dropped.",
+        "width": 440,
+        "height": 380,
+        "color": 7
+      },
+      "id": "b057eb26-495b-4f1b-a76b-02befa29fa5e",
+      "name": "Save section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        650,
+        -180
+      ]
+    }
+  ],
+  "connections": {
+    "Post URL form": {
+      "main": [
+        [
+          {
+            "node": "Engager agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Engager agent": {
+      "main": [
+        [
+          {
+            "node": "Contacts with an email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Contacts with an email": {
+      "main": [
+        [
+          {
+            "node": "Create or update contact",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI chat model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Engager agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "looot": {
+      "ai_tool": [
+        [
+          {
+            "node": "Engager agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "People format": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Engager agent",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

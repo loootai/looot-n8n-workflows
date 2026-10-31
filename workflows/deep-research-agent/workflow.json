@@ -1,0 +1,214 @@
+{
+  "name": "Research any topic with one AI agent that searches Google, news and web pages through looot",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Research any topic in chat with sources and a cost line\n\n### How it works\n1. You ask a question in n8n's chat.\n2. One AI agent plans a few searches, runs them on Google, the web and Google News through looot, reads the best pages, then writes a report with links to its sources.\n3. The last node adds how many data calls the answer took and what they cost.\n\nThe search, news and page reading all go through one looot credential, so there is no SerpAPI or Jina account to set up.\n\n**Cost per run**, from looot's public catalog on 2026-10-31: Google results $0.0009 to $0.001 per search, news $0.001 per search, a page read from $0.0002. A report with 5 searches and 8 page reads costs about $0.007 in data. Each call is capped at $0.03 and the agent at 20 steps, so a run can never spend more than $0.60. Model tokens are billed by OpenAI.\n\n### Setup\n- Needs the verified community node **n8n-nodes-looot** (built against 0.1.4): Settings > Community nodes > Install, search `looot`. [Install guide](https://docs.n8n.io/integrations/community-nodes/installation/verified-install/)\n- looot: sign up at [looot.ai](https://looot.ai), top up (from $5), create an agent token under Settings > Agent tokens, then add a **looot API** credential in n8n.\n- An OpenAI credential, or swap the model for any chat model.\n- Self-hosted n8n: set `N8N_COMMUNITY_PACKAGES_ALLOW_TOOL_USAGE=true` so the agent can use the looot node as a tool.\n\n### Customization\nChange the report format in the agent's system message. Raise Max Iterations for deeper reports. Add a Gmail or Notion node after **Add cost line** to keep the reports.",
+        "width": 520,
+        "height": 600
+      },
+      "id": "0d0dd4bb-f147-4e22-aab4-79407a0be1fe",
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -620,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "7edf5801-142a-416b-aab8-dfb31a968d53",
+      "name": "Chat",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "d0c9d05e-66be-4536-a709-06c77ff2fc10"
+    },
+    {
+      "parameters": {
+        "promptType": "auto",
+        "hasOutputParser": false,
+        "options": {
+          "systemMessage": "You are a careful research assistant. For each question:\n1. Plan 3 to 6 search queries that cover the question from different sides.\n2. Run them with the looot tool: job:google.serp.organic for Google results, job:news.search for recent news, job:web.search when Google is thin.\n3. Pick the 5 to 8 most useful result URLs and read each with job:web.scrape.markdown.\n4. Write a report in markdown: a 3 line summary, then sections with findings, then a Sources list with every URL you used.\nOnly state what the pages say. Say when sources disagree or when you found nothing.",
+          "maxIterations": 20,
+          "returnIntermediateSteps": true
+        }
+      },
+      "id": "4931997a-eb25-4ca6-a818-531572ffeafd",
+      "name": "Research agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4.1-mini"
+        },
+        "options": {}
+      },
+      "id": "9001bb69-65de-4097-a3e7-451c6883f573",
+      "name": "OpenAI chat model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "contextWindowLength": 6
+      },
+      "id": "37e7ff43-ee0b-483a-a10e-7de4d5f24926",
+      "name": "Chat memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        340,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Runs one looot data call and returns the run: status, result and actualCost. Every call is capped. Use only these ids and inputs:\n- job:google.serp.organic, input {\"query\": \"...\", \"location\": \"United States\"}: Google organic results.\n- job:news.search, input {\"query\": \"...\"}: Google News articles.\n- job:web.search, input {\"query\": \"...\", \"limit\": 10}: web search results.\n- job:web.scrape.markdown, input {\"url\": \"https://...\"}: one page as text.",
+        "operation": "run",
+        "endpointId": "={{ $fromAI('endpointId', 'A looot job or endpoint id from the tool description', 'string') }}",
+        "input": "={{ $fromAI('input', 'The input object, with the field names the tool description gives for that id', 'json') }}",
+        "idempotencyKey": "={{ ('n8n-' + $execution.id + '-' + $fromAI('endpointId', 'A looot job or endpoint id from the tool description', 'string') + '-' + JSON.stringify($fromAI('input', 'The input object, with the field names the tool description gives for that id', 'json'))).slice(0, 200) }}",
+        "fallback": true,
+        "maxCostUsd": 0.03,
+        "wait": 60
+      },
+      "id": "53fe85ac-d421-4e5c-ab27-3820985db268",
+      "name": "looot",
+      "type": "n8n-nodes-looot.loootTool",
+      "typeVersion": 1,
+      "position": [
+        480,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Add cost line\". Appends what the looot calls cost to the report the chat shows.\n// Shared helper: adds up what the agent's looot calls cost, from the agent's intermediate steps\n// (the agent's \"Return Intermediate Steps\" option is on). Each looot tool answer carries actualCost.\nfunction agentCost(item) {\n  const steps = (item && Array.isArray(item.intermediateSteps)) ? item.intermediateSteps : [];\n  let usd = 0;\n  let calls = 0;\n  for (const step of steps) {\n    const tool = String((step && step.action && step.action.tool) || \"\");\n    if (!/looot/i.test(tool)) continue;\n    calls += 1;\n    const text = typeof step.observation === \"string\" ? step.observation : JSON.stringify(step.observation ?? \"\");\n    for (const m of text.matchAll(/\"actualCost\"\\s*:\\s*([0-9.eE+-]+)/g)) {\n      const n = Number(m[1]);\n      if (Number.isFinite(n)) usd += n;\n    }\n  }\n  return { looot_calls: calls, looot_cost_usd: Number(usd.toFixed(6)) };\n}\n\nconst item = $input.first().json;\nconst cost = agentCost(item);\nconst report = typeof item.output === \"string\" ? item.output : JSON.stringify(item.output ?? \"\");\nconst line = `\\n\\n---\\nlooot calls: ${cost.looot_calls}, data cost: $${cost.looot_cost_usd.toFixed(4)} (model tokens are billed by your model provider).`;\nreturn [{ json: { output: report + line, ...cost } }];\n"
+      },
+      "id": "edb55986-61b8-4f5e-a41d-456b69d27931",
+      "name": "Add cost line",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        640,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Search, read, write\nThe agent's only data tool is looot. Every call is capped at $0.03.",
+        "width": 420,
+        "height": 600,
+        "color": 7
+      },
+      "id": "f59802a5-9acc-4729-a235-e7102300a19c",
+      "name": "Agent section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        200,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Show the cost\nAdds the number of looot calls and their cost under the report.",
+        "width": 240,
+        "height": 380,
+        "color": 7
+      },
+      "id": "88c741aa-9201-4a23-a2c5-48f72b557b17",
+      "name": "Cost section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        600,
+        -180
+      ]
+    }
+  ],
+  "connections": {
+    "Chat": {
+      "main": [
+        [
+          {
+            "node": "Research agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Research agent": {
+      "main": [
+        [
+          {
+            "node": "Add cost line",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI chat model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Research agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chat memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "Research agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "looot": {
+      "ai_tool": [
+        [
+          {
+            "node": "Research agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

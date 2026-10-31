@@ -3,14 +3,16 @@
 // idempotency key and a cost cap, and no secret is inlined.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { buildAll } from "../scripts/build.mjs";
 
 const root = new URL("..", import.meta.url).pathname;
 const known = JSON.parse(readFileSync(`${root}test/n8n-node-versions.json`, "utf8")).nodes;
-const names = readdirSync(`${root}workflows`).filter((d) => existsSync(`${root}workflows/${d}/workflow.json`));
+// The core-node workflows built by scripts/build.mjs. The looot-node ones are in node-workflows.test.mjs.
+const names = Object.keys(buildAll());
 
-test("there are four workflows, each with a README", () => {
+test("there are four core-node workflows, each with a README", () => {
   assert.deepEqual(names.sort(), ["company-research", "google-rank-check", "signup-qualifier", "work-email"]);
   for (const n of names) assert.ok(existsSync(`${root}workflows/${n}/README.md`), `${n}/README.md missing`);
 });

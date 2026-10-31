@@ -1,0 +1,290 @@
+{
+  "name": "Research your competitors with one AI agent and looot and save a page per competitor in Notion",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Research your competitors into Notion with one agent\n\n### How it works\n1. You set your company domain in **Your company**, and optionally the competitors to look at.\n2. One AI agent finds competitors on Google if you listed none, then for each one pulls company data, reads its website and pricing page, checks recent news and review sites, all through looot.\n3. Each competitor becomes a Notion page with overview, size and funding, pricing, products, news, what customers say and sources.\n\nOne looot credential replaces the Exa, Firecrawl and SerpAPI accounts this kind of workflow usually needs.\n\n**Cost per run**, from looot's public catalog on 2026-10-31: company data $0.0019 per lookup, Google results $0.0009 to $0.001, news $0.001, a page read from $0.0002. Three competitors take about 20 calls, around $0.02 in data. Each call is capped at $0.03 and the agent at 40 steps, so a run can never spend more than $1.20. Model tokens are billed by OpenAI.\n\n### Setup\n- Needs the verified community node **n8n-nodes-looot** (built against 0.1.4): Settings > Community nodes > Install, search `looot`. [Install guide](https://docs.n8n.io/integrations/community-nodes/installation/verified-install/)\n- looot: sign up at [looot.ai](https://looot.ai), top up (from $5), create an agent token under Settings > Agent tokens, then add a **looot API** credential in n8n.\n- An OpenAI credential.\n- A Notion integration with access to a database that has a Name title property. Set the database ID in **Save to Notion**.\n- Self-hosted n8n: set `N8N_COMMUNITY_PACKAGES_ALLOW_TOOL_USAGE=true`.\n\n### Customization\nChange the fields in **Competitor format** and the agent's system message together. Swap the manual trigger for a weekly schedule.",
+        "width": 520,
+        "height": 660
+      },
+      "id": "99ec3814-1062-4592-aa56-2f38b70463c1",
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -620,
+        -240
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "e063c126-23f6-423d-a0c3-054aa0142012",
+      "name": "Run it",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Your company\". Edit the three values below, then run the workflow.\nconst YOUR_COMPANY_DOMAIN = \"example.com\";\n// Leave empty and the agent finds competitors itself, or list domains to research only those.\nconst COMPETITORS = [];\nconst MAX_COMPETITORS = 3;\n\nconst clean = (v) => String(v || \"\").trim().toLowerCase().replace(/^https?:\\/\\//, \"\").replace(/^www\\./, \"\").split(/[/?#]/)[0];\nconst domain = clean(YOUR_COMPANY_DOMAIN);\nif (!/^[a-z0-9.-]+\\.[a-z]{2,}$/.test(domain)) throw new Error(\"Set YOUR_COMPANY_DOMAIN in the Your company node, for example acme.com\");\nreturn [{\n  json: {\n    domain,\n    competitors: COMPETITORS.map(clean).filter(Boolean).slice(0, MAX_COMPETITORS),\n    max_competitors: Math.max(1, Math.min(5, MAX_COMPETITORS)),\n  },\n}];\n"
+      },
+      "id": "928553aa-c1c9-4c52-ae6c-0ca0234b707a",
+      "name": "Your company",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=My company: {{ $json.domain }}.\n{{ $json.competitors.length ? 'Research these competitors: ' + $json.competitors.join(', ') : 'Find my ' + $json.max_competitors + ' closest competitors first, then research them.' }}",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You research competitors for a sales and marketing team.\nIf no competitors are given: read the company's homepage with job:web.scrape.markdown, then search Google with job:google.serp.organic for \"<product category> alternatives\" and pick the closest direct competitors.\nFor each competitor:\n- job:company.enrich with {\"domain\": \"...\"} for size, funding and industry.\n- job:web.scrape.markdown on the homepage and the pricing page.\n- job:news.search with {\"query\": \"\\\"<name>\\\"\"} for the last months.\n- job:google.serp.organic with {\"query\": \"<name> reviews g2 OR capterra\"} and read one review page.\nOnly report what the sources say and list every URL you used.",
+          "maxIterations": 40,
+          "returnIntermediateSteps": true
+        }
+      },
+      "id": "c90ab9fb-fef4-4eb7-aa09-0d2d0b62fee3",
+      "name": "Competitor research agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4.1-mini"
+        },
+        "options": {}
+      },
+      "id": "4afd3449-ed51-48f1-ae05-fd8c2c2626e5",
+      "name": "OpenAI chat model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        380,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Runs one looot data call and returns the run: status, result and actualCost. Every call is capped. Use only these ids and inputs:\n- job:company.enrich, input {\"domain\": \"example.com\"}: company size, industry, funding, location.\n- job:google.serp.organic, input {\"query\": \"...\"}: Google organic results.\n- job:news.search, input {\"query\": \"...\"}: Google News articles.\n- job:web.scrape.markdown, input {\"url\": \"https://...\"}: one page as text.",
+        "operation": "run",
+        "endpointId": "={{ $fromAI('endpointId', 'A looot job or endpoint id from the tool description', 'string') }}",
+        "input": "={{ $fromAI('input', 'The input object, with the field names the tool description gives for that id', 'json') }}",
+        "idempotencyKey": "={{ ('n8n-' + $execution.id + '-' + $fromAI('endpointId', 'A looot job or endpoint id from the tool description', 'string') + '-' + JSON.stringify($fromAI('input', 'The input object, with the field names the tool description gives for that id', 'json'))).slice(0, 200) }}",
+        "fallback": true,
+        "maxCostUsd": 0.03,
+        "wait": 60
+      },
+      "id": "2362b313-0b41-42b4-ae6c-189e1eca06e8",
+      "name": "looot",
+      "type": "n8n-nodes-looot.loootTool",
+      "typeVersion": 1,
+      "position": [
+        520,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n  \"competitors\": [\n    {\n      \"name\": \"Example Inc\",\n      \"domain\": \"example.com\",\n      \"overview\": \"One line on what they sell and to whom.\",\n      \"size_and_funding\": \"120 people, Series A\",\n      \"pricing\": \"From $49 per seat per month\",\n      \"products\": [\n        \"Product A\"\n      ],\n      \"recent_news\": [\n        \"2026-10: raised a round\"\n      ],\n      \"reviews\": [\n        \"Users like X, dislike Y\"\n      ],\n      \"sources\": [\n        \"https://example.com/pricing\"\n      ]\n    }\n  ]\n}"
+      },
+      "id": "edd9c036-7af9-48d8-a17e-8fc70549e37c",
+      "name": "Competitor format",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.2,
+      "position": [
+        680,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"One page per competitor\". Turns the agent's answer into one Notion page each.\n// Shared helper: adds up what the agent's looot calls cost, from the agent's intermediate steps\n// (the agent's \"Return Intermediate Steps\" option is on). Each looot tool answer carries actualCost.\nfunction agentCost(item) {\n  const steps = (item && Array.isArray(item.intermediateSteps)) ? item.intermediateSteps : [];\n  let usd = 0;\n  let calls = 0;\n  for (const step of steps) {\n    const tool = String((step && step.action && step.action.tool) || \"\");\n    if (!/looot/i.test(tool)) continue;\n    calls += 1;\n    const text = typeof step.observation === \"string\" ? step.observation : JSON.stringify(step.observation ?? \"\");\n    for (const m of text.matchAll(/\"actualCost\"\\s*:\\s*([0-9.eE+-]+)/g)) {\n      const n = Number(m[1]);\n      if (Number.isFinite(n)) usd += n;\n    }\n  }\n  return { looot_calls: calls, looot_cost_usd: Number(usd.toFixed(6)) };\n}\n\nconst item = $input.first().json;\nconst list = (item.output && Array.isArray(item.output.competitors)) ? item.output.competitors : [];\nconst cost = agentCost(item);\nconst each = list.length ? cost.looot_cost_usd / list.length : 0;\nconst bullets = (arr) => (Array.isArray(arr) ? arr : []).filter(Boolean).map((x) => `- ${x}`).join(\"\\n\");\nreturn list.filter((c) => c && c.name).map((c) => ({\n  json: {\n    title: `${c.name} (${c.domain || \"no domain\"})`,\n    body: [\n      `Overview: ${c.overview || \"n/a\"}`,\n      `Size and funding: ${c.size_and_funding || \"n/a\"}`,\n      `Pricing: ${c.pricing || \"n/a\"}`,\n      `Products:\\n${bullets(c.products) || \"n/a\"}`,\n      `Recent news:\\n${bullets(c.recent_news) || \"n/a\"}`,\n      `What customers say:\\n${bullets(c.reviews) || \"n/a\"}`,\n      `Sources:\\n${bullets(c.sources) || \"n/a\"}`,\n      `Data cost for this page: about $${each.toFixed(4)}`,\n    ].join(\"\\n\\n\").slice(0, 1990),\n  },\n}));\n"
+      },
+      "id": "979bdc27-8adf-45ae-ac60-5fbaa89af842",
+      "name": "One page per competitor",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        860,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "databaseId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_DATABASE_ID"
+        },
+        "title": "={{ $json.title }}",
+        "blockUi": {
+          "blockValues": [
+            {
+              "textContent": "={{ $json.body }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "c29f9953-7af8-4989-ab4e-1a20104852b8",
+      "name": "Save to Notion",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [
+        1080,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Who to research\nYour domain and, if you want, a fixed list of competitors.",
+        "width": 460,
+        "height": 380,
+        "color": 7
+      },
+      "id": "b02b07b7-2f76-444e-a0a2-4cefa563546e",
+      "name": "Input section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Find and research\nOne agent, one data tool. Company data, websites, news and reviews all come from looot.",
+        "width": 440,
+        "height": 600,
+        "color": 7
+      },
+      "id": "2a9d2c62-d2fd-4c8d-a0e5-f0289333ae48",
+      "name": "Agent section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        380,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## One Notion page each\nEach page ends with its share of the data cost.",
+        "width": 440,
+        "height": 380,
+        "color": 7
+      },
+      "id": "093d824a-b689-4bce-a389-34b4d3d81812",
+      "name": "Save section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        820,
+        -180
+      ]
+    }
+  ],
+  "connections": {
+    "Run it": {
+      "main": [
+        [
+          {
+            "node": "Your company",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Your company": {
+      "main": [
+        [
+          {
+            "node": "Competitor research agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Competitor research agent": {
+      "main": [
+        [
+          {
+            "node": "One page per competitor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "One page per competitor": {
+      "main": [
+        [
+          {
+            "node": "Save to Notion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI chat model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Competitor research agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "looot": {
+      "ai_tool": [
+        [
+          {
+            "node": "Competitor research agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Competitor format": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Competitor research agent",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

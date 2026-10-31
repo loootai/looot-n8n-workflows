@@ -1,11 +1,12 @@
 {
   "name": "looot-n8n-workflows",
-  "version": "0.1.0",
-  "description": "Importable n8n workflows for GTM data on core nodes only: work email waterfall, company research, signup qualifier, Google rank check. Built on the looot API.",
+  "version": "0.2.0",
+  "description": "Importable n8n workflows for GTM data on the looot API: 4 on core nodes only, 12 on the verified looot node (6 of them one-agent rebuilds of popular multi-provider templates) and a reusable looot agent sub-workflow.",
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "node scripts/build.mjs",
+    "build": "node scripts/build.mjs && node scripts/build-node.mjs",
+    "check:params": "node scripts/check-params.mjs",
     "test": "node --test test/*.test.mjs",
     "scan": "bash scripts/leak-scan.sh ."
   },
@@ -13,5 +14,5 @@
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/loootai/looot-n8n-workflows.git" },
   "homepage": "https://github.com/loootai/looot-n8n-workflows",
-  "keywords": ["n8n", "n8n-workflow", "looot", "email finder", "lead enrichment", "gtm", "rank tracking"]
+  "keywords": ["n8n", "n8n-workflow", "looot", "email finder", "lead enrichment", "gtm", "rank tracking", "ai agent", "n8n-nodes-looot"]
 }

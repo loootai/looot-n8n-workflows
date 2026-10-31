@@ -1,0 +1,229 @@
+{
+  "name": "Add the tech stack to new HubSpot companies with looot technographics",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Tech stack on every new HubSpot company\n\n### How it works\n1. Every hour, reads companies recently created or updated in HubSpot.\n2. Keeps those with a domain and an empty looot_tech_stack property, at most 25 per run.\n3. looot looks up the technologies on each domain, falling back to the next provider when one misses.\n4. The company's looot_tech_stack property gets a comma separated list, so reps and lists can filter on it.\n\nCompanies already done are remembered in the workflow's static data, which n8n keeps only for active workflows.\n\n**Cost per company**, from looot's public catalog on 2026-10-31: tech lookup from $0 to $0.0089 depending on the provider that answers. Each call is capped at $0.05, so a run can never spend more than $1.25.\n\n### Setup\n- Needs the verified community node **n8n-nodes-looot** (built against 0.1.4): Settings > Community nodes > Install, search `looot`. [Install guide](https://docs.n8n.io/integrations/community-nodes/installation/verified-install/)\n- looot: sign up at [looot.ai](https://looot.ai), top up (from $5), create an agent token under Settings > Agent tokens, then add a **looot API** credential in n8n.\n- A HubSpot private app token credential with companies read and write access.\n- In HubSpot, create a company property named looot_tech_stack (single-line or multi-line text).\n\n### Customization\nChange PROPERTY in **Companies without a stack** to write somewhere else. Add an IF after **Stack as text** to alert Slack when a company runs a competitor's product.",
+        "width": 520,
+        "height": 600
+      },
+      "id": "924117e6-2d2c-4d9d-a01a-c89f09e661f1",
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -620,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours"
+            }
+          ]
+        }
+      },
+      "id": "e4b2b1eb-4ea5-4506-a626-adb4a2fffa9b",
+      "name": "Every hour",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "appToken",
+        "resource": "company",
+        "operation": "getRecentlyCreatedUpdated",
+        "returnAll": false,
+        "limit": 100,
+        "additionalFields": {}
+      },
+      "id": "01b6f275-3da3-4572-a633-8f5a7d06920c",
+      "name": "Recent companies",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2.1,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Companies without a stack\". Recently created or updated companies that have a\n// domain and no tech stack yet. Ids already done are remembered (active workflows only).\n// Shared helpers for reading a looot run item. The looot node returns the run as the item:\n// {runId, status, result, normalized: {fields}, actualCost, route: {servedBy}, error, topUpUrl}.\n// With \"On Error: Continue\", a refused call (402 empty balance, 400 bad input) arrives as {error: \"...\"}.\nfunction runCost(run) {\n  return run && typeof run.actualCost === \"number\" ? run.actualCost : 0;\n}\nfunction runProblem(run) {\n  if (!run || typeof run !== \"object\") return \"no answer\";\n  if (!run.status) {\n    const e = run.error;\n    if (typeof e === \"string\") return e;\n    if (e && typeof e === \"object\") return [e.code, e.message].filter(Boolean).join(\": \") || \"error\";\n    return \"error\";\n  }\n  if (run.status !== \"completed\") return (run.error && run.error.message) || run.status;\n  return null;\n}\nfunction squash(k) {\n  return String(k).toLowerCase().replace(/[\\s_\\-.]/g, \"\");\n}\n// First string or number under any of `keys`, searched a few levels deep.\nfunction find(src, keys, depth = 0) {\n  if (!src || typeof src !== \"object\" || depth > 4) return \"\";\n  if (Array.isArray(src)) {\n    for (const x of src.slice(0, 5)) { const v = find(x, keys, depth + 1); if (v) return v; }\n    return \"\";\n  }\n  for (const key of keys) {\n    for (const [k, v] of Object.entries(src)) {\n      if (squash(k) === squash(key) && (typeof v === \"string\" || typeof v === \"number\") && String(v).trim()) return String(v).trim();\n    }\n  }\n  for (const v of Object.values(src)) { const r = find(v, keys, depth + 1); if (r) return r; }\n  return \"\";\n}\n// First array (a few levels deep) that has an element passing `test`.\nfunction firstArray(src, test, depth = 0) {\n  if (!src || typeof src !== \"object\" || depth > 4) return [];\n  if (Array.isArray(src) && src.some(test)) return src;\n  for (const v of Object.values(src)) { const r = firstArray(v, test, depth + 1); if (r.length) return r; }\n  return [];\n}\nfunction runFields(run) {\n  return { n: (run && run.normalized && run.normalized.fields) || {}, r: run && run.result };\n}\nfunction findEmail(run) {\n  const re = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}/;\n  const norm = run && run.normalized && run.normalized.fields && run.normalized.fields.email;\n  if (typeof norm === \"string\" && re.test(norm)) return norm.match(re)[0].toLowerCase();\n  const m = JSON.stringify((run && run.result) ?? \"\").match(re);\n  return m ? m[0].toLowerCase() : null;\n}\n// Maps the many verifier vocabularies onto valid / invalid / catch_all / risky / unknown.\nfunction emailStatus(run) {\n  const raw = find(runFields(run), [\"status\", \"result\", \"verdict\", \"state\", \"deliverability\", \"email_status\"]).toLowerCase();\n  if (/catch.?all|accept.?all/.test(raw)) return \"catch_all\";\n  if (/^(valid|deliverable|ok|safe|verified)$/.test(raw)) return \"valid\";\n  if (/invalid|undeliverable|bounce|bad|disposable|not.?found/.test(raw)) return \"invalid\";\n  if (/risky|unknown_risky|accept/.test(raw)) return \"risky\";\n  return \"unknown\";\n}\nfunction cleanDomain(v) {\n  const s = String(v || \"\").trim().toLowerCase().replace(/^https?:\\/\\//, \"\").replace(/^www\\./, \"\").split(/[/?#]/)[0];\n  return /^[a-z0-9.-]+\\.[a-z]{2,}$/.test(s) ? s : \"\";\n}\n\nconst PROPERTY = \"looot_tech_stack\";\nconst store = typeof $getWorkflowStaticData === \"function\" ? $getWorkflowStaticData(\"global\") : {};\nconst done = new Set(Array.isArray(store.doneIds) ? store.doneIds : []);\nconst val = (p) => (p && typeof p === \"object\" && \"value\" in p ? p.value : p);\nconst out = [];\nfor (const { json: c } of $input.all()) {\n  const props = c.properties || {};\n  const id = String(c.companyId ?? c.id ?? \"\");\n  const domain = cleanDomain(val(props.domain) || val(props.website));\n  if (!id || !domain || done.has(id) || String(val(props[PROPERTY]) || \"\").trim()) continue;\n  out.push({ json: { companyId: id, domain, name: val(props.name) || \"\" } });\n}\nreturn out.slice(0, 25);\n"
+      },
+      "id": "9b92c62a-ea43-4ae2-ad5d-74f713785e27",
+      "name": "Companies without a stack",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "run",
+        "endpointId": "job:company.technographics",
+        "input": "={{ JSON.stringify({ domain: $json.domain }) }}",
+        "idempotencyKey": "={{ 'n8n-techstack:' + $json.domain }}",
+        "fallback": true,
+        "maxCostUsd": 0.05,
+        "wait": 60
+      },
+      "id": "978f6d14-5adb-41ac-a088-24f00361ee82",
+      "name": "Look up tech stack",
+      "type": "n8n-nodes-looot.looot",
+      "typeVersion": 1,
+      "position": [
+        660,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Stack as text\". One comma separated list per company, ready for a HubSpot property.\n// Shared helpers for reading a looot run item. The looot node returns the run as the item:\n// {runId, status, result, normalized: {fields}, actualCost, route: {servedBy}, error, topUpUrl}.\n// With \"On Error: Continue\", a refused call (402 empty balance, 400 bad input) arrives as {error: \"...\"}.\nfunction runCost(run) {\n  return run && typeof run.actualCost === \"number\" ? run.actualCost : 0;\n}\nfunction runProblem(run) {\n  if (!run || typeof run !== \"object\") return \"no answer\";\n  if (!run.status) {\n    const e = run.error;\n    if (typeof e === \"string\") return e;\n    if (e && typeof e === \"object\") return [e.code, e.message].filter(Boolean).join(\": \") || \"error\";\n    return \"error\";\n  }\n  if (run.status !== \"completed\") return (run.error && run.error.message) || run.status;\n  return null;\n}\nfunction squash(k) {\n  return String(k).toLowerCase().replace(/[\\s_\\-.]/g, \"\");\n}\n// First string or number under any of `keys`, searched a few levels deep.\nfunction find(src, keys, depth = 0) {\n  if (!src || typeof src !== \"object\" || depth > 4) return \"\";\n  if (Array.isArray(src)) {\n    for (const x of src.slice(0, 5)) { const v = find(x, keys, depth + 1); if (v) return v; }\n    return \"\";\n  }\n  for (const key of keys) {\n    for (const [k, v] of Object.entries(src)) {\n      if (squash(k) === squash(key) && (typeof v === \"string\" || typeof v === \"number\") && String(v).trim()) return String(v).trim();\n    }\n  }\n  for (const v of Object.values(src)) { const r = find(v, keys, depth + 1); if (r) return r; }\n  return \"\";\n}\n// First array (a few levels deep) that has an element passing `test`.\nfunction firstArray(src, test, depth = 0) {\n  if (!src || typeof src !== \"object\" || depth > 4) return [];\n  if (Array.isArray(src) && src.some(test)) return src;\n  for (const v of Object.values(src)) { const r = firstArray(v, test, depth + 1); if (r.length) return r; }\n  return [];\n}\nfunction runFields(run) {\n  return { n: (run && run.normalized && run.normalized.fields) || {}, r: run && run.result };\n}\nfunction findEmail(run) {\n  const re = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}/;\n  const norm = run && run.normalized && run.normalized.fields && run.normalized.fields.email;\n  if (typeof norm === \"string\" && re.test(norm)) return norm.match(re)[0].toLowerCase();\n  const m = JSON.stringify((run && run.result) ?? \"\").match(re);\n  return m ? m[0].toLowerCase() : null;\n}\n// Maps the many verifier vocabularies onto valid / invalid / catch_all / risky / unknown.\nfunction emailStatus(run) {\n  const raw = find(runFields(run), [\"status\", \"result\", \"verdict\", \"state\", \"deliverability\", \"email_status\"]).toLowerCase();\n  if (/catch.?all|accept.?all/.test(raw)) return \"catch_all\";\n  if (/^(valid|deliverable|ok|safe|verified)$/.test(raw)) return \"valid\";\n  if (/invalid|undeliverable|bounce|bad|disposable|not.?found/.test(raw)) return \"invalid\";\n  if (/risky|unknown_risky|accept/.test(raw)) return \"risky\";\n  return \"unknown\";\n}\nfunction cleanDomain(v) {\n  const s = String(v || \"\").trim().toLowerCase().replace(/^https?:\\/\\//, \"\").replace(/^www\\./, \"\").split(/[/?#]/)[0];\n  return /^[a-z0-9.-]+\\.[a-z]{2,}$/.test(s) ? s : \"\";\n}\n\nconst store = typeof $getWorkflowStaticData === \"function\" ? $getWorkflowStaticData(\"global\") : {};\nconst done = new Set(Array.isArray(store.doneIds) ? store.doneIds : []);\nconst out = $input.all().map(({ json: run }, i) => {\n  const c = $(\"Companies without a stack\").itemMatching(i).json;\n  const problem = runProblem(run);\n  const items = problem ? [] : firstArray(run.result, (x) => typeof x === \"string\" || (x && typeof x === \"object\" && (x.name || x.technology || x.Name)));\n  const names = [...new Set(items.map((x) => (typeof x === \"string\" ? x : x.name || x.technology || x.Name)).filter(Boolean))];\n  if (!problem) done.add(c.companyId);\n  return {\n    json: {\n      companyId: c.companyId,\n      domain: c.domain,\n      tech_stack: problem ? `lookup failed: ${problem}`.slice(0, 200) : names.length ? names.slice(0, 60).join(\", \").slice(0, 1000) : \"none found\",\n      looot_cost_usd: runCost(run),\n    },\n  };\n});\nstore.doneIds = [...done].slice(-5000);\nreturn out;\n"
+      },
+      "id": "d98ddb94-4f66-4875-ab17-af06ea51a0a1",
+      "name": "Stack as text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "appToken",
+        "resource": "company",
+        "operation": "update",
+        "companyId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $json.companyId }}"
+        },
+        "updateFields": {
+          "customPropertiesUi": {
+            "customPropertiesValues": [
+              {
+                "property": "looot_tech_stack",
+                "value": "={{ $json.tech_stack }}"
+              }
+            ]
+          }
+        }
+      },
+      "id": "ed673e9e-75f9-474b-a64d-57bed369f472",
+      "name": "Update company",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2.1,
+      "position": [
+        1100,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## New companies only\nA domain and no stack yet.",
+        "width": 420,
+        "height": 380,
+        "color": 7
+      },
+      "id": "d8038965-ed06-4254-afed-3e90fe1d9e5a",
+      "name": "Pick section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        160,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Look up and write\nOne looot call per company, then one HubSpot update.",
+        "width": 660,
+        "height": 380,
+        "color": 7
+      },
+      "id": "273e4212-6f03-4edd-af24-1e4dd3c3bf95",
+      "name": "Lookup section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        600,
+        -180
+      ]
+    }
+  ],
+  "connections": {
+    "Every hour": {
+      "main": [
+        [
+          {
+            "node": "Recent companies",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recent companies": {
+      "main": [
+        [
+          {
+            "node": "Companies without a stack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Companies without a stack": {
+      "main": [
+        [
+          {
+            "node": "Look up tech stack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Look up tech stack": {
+      "main": [
+        [
+          {
+            "node": "Stack as text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stack as text": {
+      "main": [
+        [
+          {
+            "node": "Update company",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

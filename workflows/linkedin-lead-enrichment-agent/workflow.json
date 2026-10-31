@@ -1,0 +1,298 @@
+{
+  "name": "Find and enrich LinkedIn leads with verified emails using one AI agent and looot",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Find LinkedIn leads with verified emails into Google Sheets\n\n### How it works\n1. You fill in a form: job title, location, an optional company keyword and how many people.\n2. One AI agent searches people through looot, reads each LinkedIn profile and recent posts, finds the work email and verifies it.\n3. Each person lands in Google Sheets with title, company, email, email status, a short summary of their recent posts and a one line icebreaker.\n\nThis replaces a setup with separate Apollo, RapidAPI LinkedIn and email validation accounts. One looot credential covers search, profiles, posts, email finding and verification, and looot tries the next provider when one misses.\n\n**Cost per lead**, from looot's public catalog on 2026-10-31: people search from $0.00036 per result, profile $0.0012, posts $0.0015, email find from $0.0036, verify $0.00145. About $0.008 per lead, $0.08 for 10. Each call is capped at $0.03 and the agent at 60 steps, so a run can never spend more than $1.80. Model tokens are billed by OpenAI.\n\n### Setup\n- Needs the verified community node **n8n-nodes-looot** (built against 0.1.4): Settings > Community nodes > Install, search `looot`. [Install guide](https://docs.n8n.io/integrations/community-nodes/installation/verified-install/)\n- looot: sign up at [looot.ai](https://looot.ai), top up (from $5), create an agent token under Settings > Agent tokens, then add a **looot API** credential in n8n.\n- An OpenAI credential.\n- A Google Sheet with the headers: full_name, title, company, company_domain, linkedin_url, email, email_status, about, recent_post_topics, icebreaker, found_at, run_cost_usd. Set its ID in **Save leads**.\n- Self-hosted n8n: set `N8N_COMMUNITY_PACKAGES_ALLOW_TOOL_USAGE=true`.\n\n### Customization\nChange the icebreaker rule in the system message. Drop the posts step to halve the cost.",
+        "width": 520,
+        "height": 680
+      },
+      "id": "8ec06e1e-7c39-46a5-a356-9baf42204454",
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -620,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "formTitle": "Find LinkedIn leads",
+        "formDescription": "Searches people, enriches each one and verifies the email. Data is billed to your looot balance.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Job title",
+              "placeholder": "Head of Marketing",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Location",
+              "placeholder": "Germany",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Company keyword",
+              "placeholder": "SaaS (optional)"
+            },
+            {
+              "fieldLabel": "How many people",
+              "fieldType": "number",
+              "placeholder": "10",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a9224435-6473-4861-a7d4-70a8dbe5da40",
+      "name": "Lead search form",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "3becd907-ebb7-43f2-ac03-95d3fa615826"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Find {{ Math.min(Number($json['How many people']) || 5, 10) }} people with the job title \"{{ $json['Job title'] }}\" in {{ $json['Location'] }}{{ $json['Company keyword'] ? ' at ' + $json['Company keyword'] + ' companies' : '' }}.",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You build enriched lead lists.\n1. Call job:people.search with {\"job_title\": \"...\", \"location\": \"...\", \"limit\": <count>} (add \"company\" when a keyword is given).\n2. For each person with a LinkedIn URL: job:linkedin.person.profile with {\"linkedin_url\": \"...\"}, then job:linkedin.person.posts with {\"linkedin_url\": \"...\"}.\n3. Find the work email with job:people.email.find using {\"first_name\", \"last_name\", \"domain\"} of their current company. If you get an address, check it with job:people.email.verify and {\"email\": \"...\"}.\n4. Write a one sentence icebreaker that refers to a real recent post or their role. Never invent facts; leave fields empty when unknown.\nemail_status is the verifier's word: valid, invalid, catch_all, risky or unknown.",
+          "maxIterations": 60,
+          "returnIntermediateSteps": true
+        }
+      },
+      "id": "e2c6b69d-1ef3-403d-a4f4-cddc2ac03304",
+      "name": "Lead research agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4.1-mini"
+        },
+        "options": {}
+      },
+      "id": "210f5c4f-e98b-4da2-a75e-91d286d53c3f",
+      "name": "OpenAI chat model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        180,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Runs one looot data call and returns the run: status, result and actualCost. Every call is capped. Use only these ids and inputs:\n- job:people.search, input {\"job_title\": \"...\", \"location\": \"...\", \"company\": \"...\", \"limit\": 10}: people with LinkedIn URLs.\n- job:linkedin.person.profile, input {\"linkedin_url\": \"...\"}: the profile.\n- job:linkedin.person.posts, input {\"linkedin_url\": \"...\"}: recent posts.\n- job:people.email.find, input {\"first_name\": \"...\", \"last_name\": \"...\", \"domain\": \"example.com\"}: work email.\n- job:people.email.verify, input {\"email\": \"...\"}: deliverability.",
+        "operation": "run",
+        "endpointId": "={{ $fromAI('endpointId', 'A looot job or endpoint id from the tool description', 'string') }}",
+        "input": "={{ $fromAI('input', 'The input object, with the field names the tool description gives for that id', 'json') }}",
+        "idempotencyKey": "={{ ('n8n-' + $execution.id + '-' + $fromAI('endpointId', 'A looot job or endpoint id from the tool description', 'string') + '-' + JSON.stringify($fromAI('input', 'The input object, with the field names the tool description gives for that id', 'json'))).slice(0, 200) }}",
+        "fallback": true,
+        "maxCostUsd": 0.03,
+        "wait": 60
+      },
+      "id": "7a3b9840-585c-4631-a260-2dfc3f4e330f",
+      "name": "looot",
+      "type": "n8n-nodes-looot.loootTool",
+      "typeVersion": 1,
+      "position": [
+        360,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n  \"leads\": [\n    {\n      \"full_name\": \"Ada Lovelace\",\n      \"title\": \"Head of Marketing\",\n      \"company\": \"Example GmbH\",\n      \"company_domain\": \"example.com\",\n      \"linkedin_url\": \"https://www.linkedin.com/in/example\",\n      \"email\": \"ada@example.com\",\n      \"email_status\": \"valid\",\n      \"about\": \"Two lines from the profile.\",\n      \"recent_post_topics\": [\n        \"topic one\"\n      ],\n      \"icebreaker\": \"One sentence.\"\n    }\n  ]\n}"
+      },
+      "id": "e802e109-787e-4bb4-a475-2303b3e2edb6",
+      "name": "Leads format",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.2,
+      "position": [
+        540,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Leads to rows\". One row per person; people without a LinkedIn URL are dropped.\n// Shared helper: adds up what the agent's looot calls cost, from the agent's intermediate steps\n// (the agent's \"Return Intermediate Steps\" option is on). Each looot tool answer carries actualCost.\nfunction agentCost(item) {\n  const steps = (item && Array.isArray(item.intermediateSteps)) ? item.intermediateSteps : [];\n  let usd = 0;\n  let calls = 0;\n  for (const step of steps) {\n    const tool = String((step && step.action && step.action.tool) || \"\");\n    if (!/looot/i.test(tool)) continue;\n    calls += 1;\n    const text = typeof step.observation === \"string\" ? step.observation : JSON.stringify(step.observation ?? \"\");\n    for (const m of text.matchAll(/\"actualCost\"\\s*:\\s*([0-9.eE+-]+)/g)) {\n      const n = Number(m[1]);\n      if (Number.isFinite(n)) usd += n;\n    }\n  }\n  return { looot_calls: calls, looot_cost_usd: Number(usd.toFixed(6)) };\n}\n\nconst item = $input.first().json;\nconst leads = (item.output && Array.isArray(item.output.leads)) ? item.output.leads : [];\nconst cost = agentCost(item);\nconst at = new Date().toISOString();\nreturn leads\n  .filter((l) => l && l.full_name && l.linkedin_url)\n  .map((l) => ({\n    json: {\n      full_name: l.full_name,\n      title: l.title || \"\",\n      company: l.company || \"\",\n      company_domain: l.company_domain || \"\",\n      linkedin_url: l.linkedin_url,\n      email: l.email || \"\",\n      email_status: l.email_status || (l.email ? \"unknown\" : \"not_found\"),\n      about: (l.about || \"\").slice(0, 500),\n      recent_post_topics: Array.isArray(l.recent_post_topics) ? l.recent_post_topics.join(\"; \") : (l.recent_post_topics || \"\"),\n      icebreaker: l.icebreaker || \"\",\n      found_at: at,\n      run_cost_usd: cost.looot_cost_usd,\n    },\n  }));\n"
+      },
+      "id": "6bb31073-bdf7-48f9-a4c7-97370e1e4f80",
+      "name": "Leads to rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_SPREADSHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Leads"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "26bb13c2-758a-4444-a952-282960d4fcff",
+      "name": "Save leads",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.6,
+      "position": [
+        900,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Who to find\nTitle, place, keyword and count.",
+        "width": 240,
+        "height": 380,
+        "color": 7
+      },
+      "id": "257dea99-83e9-4b93-a548-db2267f48a63",
+      "name": "Form section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Search, enrich, verify\nFive looot jobs behind one tool. looot tries the next provider on a miss.",
+        "width": 440,
+        "height": 600,
+        "color": 7
+      },
+      "id": "c3f7b3af-71ae-45e4-a197-50e176c1e0d2",
+      "name": "Agent section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        200,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## One row per person\nPeople without a LinkedIn URL are dropped.",
+        "width": 440,
+        "height": 380,
+        "color": 7
+      },
+      "id": "e5099323-6865-4653-ac58-6913c0b320a0",
+      "name": "Save section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        650,
+        -180
+      ]
+    }
+  ],
+  "connections": {
+    "Lead search form": {
+      "main": [
+        [
+          {
+            "node": "Lead research agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lead research agent": {
+      "main": [
+        [
+          {
+            "node": "Leads to rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leads to rows": {
+      "main": [
+        [
+          {
+            "node": "Save leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI chat model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Lead research agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "looot": {
+      "ai_tool": [
+        [
+          {
+            "node": "Lead research agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leads format": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Lead research agent",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

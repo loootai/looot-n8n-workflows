@@ -1,0 +1,243 @@
+{
+  "name": "Reusable looot data agent: call it from any workflow with a task and a cost cap",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## looot data agent, a sub-workflow you can call from anywhere\n\n### How it works\nOther workflows call this one with an **Execute Workflow** node and two inputs: `task` (plain words, for example \"find the work email of Ada Lovelace at example.com\") and `max_cost_usd` (the most one data call may cost).\n\n1. The agent searches looot's catalog for the right endpoint. Search is free.\n2. It inspects that endpoint to read its inputs and price. Inspect is free.\n3. It runs it. The Run tool's cap comes from `max_cost_usd`, so a call above it is refused before any charge.\n4. The calling workflow gets back `answer`, `looot_calls` and `looot_cost_usd`.\n\nThis is the pattern behind the other agent templates in this repo, without a fixed job list: one credential and one balance for 2,500+ endpoints.\n\n**Cost**: the price of each call is shown by the inspect step before the run. The agent stops at 10 steps, so a task can never spend more than 10 times `max_cost_usd` (default $0.05). Model tokens are billed by OpenAI.\n\n### Setup\n- Needs the verified community node **n8n-nodes-looot** (built against 0.1.4): Settings > Community nodes > Install, search `looot`. [Install guide](https://docs.n8n.io/integrations/community-nodes/installation/verified-install/)\n- looot: sign up at [looot.ai](https://looot.ai), top up (from $5), create an agent token under Settings > Agent tokens, then add a **looot API** credential in n8n.\n- An OpenAI credential.\n- Self-hosted n8n: set `N8N_COMMUNITY_PACKAGES_ALLOW_TOOL_USAGE=true`.\n\n### Customization\nNarrow the system message to one domain, for example only email jobs, to make it faster and cheaper.",
+        "width": 520,
+        "height": 660
+      },
+      "id": "f6c6e921-c9d6-41af-a03f-f77d8b7900d4",
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -620,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "inputSource": "workflowInputs",
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "task"
+            },
+            {
+              "name": "max_cost_usd",
+              "type": "number"
+            }
+          ]
+        }
+      },
+      "id": "ccbd6149-26bd-4dad-a5d1-cef959fdf14a",
+      "name": "When called by another workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.task }}",
+        "hasOutputParser": false,
+        "options": {
+          "systemMessage": "You get business data for another workflow. For each task:\n1. Search the looot catalog for the task in plain words. Prefer a job id (job:<id>) when one fits, because looot then falls back between providers.\n2. Inspect the endpoint or job you picked to read its exact input fields and price.\n3. Run it with those fields. If it misses, say so; do not loop.\nAnswer with the data only, as compact JSON when the task asks for fields.",
+          "maxIterations": 10,
+          "returnIntermediateSteps": true
+        }
+      },
+      "id": "811b43b5-c878-4f0e-a808-c77265344658",
+      "name": "looot data agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4.1-mini"
+        },
+        "options": {}
+      },
+      "id": "aef47504-d72b-4730-a5ab-fda020e60e12",
+      "name": "OpenAI chat model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        120,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Free. Finds looot endpoints for a task described in plain words. Each row has an endpoint id, its price and whether it runs now.",
+        "operation": "searchCatalog",
+        "query": "={{ $fromAI('query', 'The task in plain words, for example find the work email of a person', 'string') }}",
+        "limit": 8,
+        "filters": {
+          "prefer": "balanced"
+        }
+      },
+      "id": "80627e2e-9cf7-4c9c-a579-68d93edbe88c",
+      "name": "looot search",
+      "type": "n8n-nodes-looot.loootTool",
+      "typeVersion": 1,
+      "position": [
+        260,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Free. Shows one endpoint's exact input fields, output and price before you run it. Also accepts job:<job id>.",
+        "operation": "inspect",
+        "endpointId": "={{ $fromAI('inspectId', 'The endpoint id or job:<job id> to inspect', 'string') }}"
+      },
+      "id": "372e6c00-6470-4c38-ad75-0cb48ce3990e",
+      "name": "looot inspect",
+      "type": "n8n-nodes-looot.loootTool",
+      "typeVersion": 1,
+      "position": [
+        400,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Runs a looot endpoint or job:<job id> with the input fields that inspect listed. Returns the run with status, result and actualCost.",
+        "operation": "run",
+        "endpointId": "={{ $fromAI('endpointId', 'A looot job or endpoint id from the tool description', 'string') }}",
+        "input": "={{ $fromAI('input', 'The input object, with the field names the tool description gives for that id', 'json') }}",
+        "idempotencyKey": "={{ ('n8n-' + $execution.id + '-' + $fromAI('endpointId', 'A looot job or endpoint id from the tool description', 'string') + '-' + JSON.stringify($fromAI('input', 'The input object, with the field names the tool description gives for that id', 'json'))).slice(0, 200) }}",
+        "fallback": true,
+        "maxCostUsd": "={{ Number($('When called by another workflow').first().json.max_cost_usd) || 0.05 }}",
+        "wait": 60
+      },
+      "id": "c09e7d95-c6ae-4b7d-ad54-5f57c94dbfd3",
+      "name": "looot run",
+      "type": "n8n-nodes-looot.loootTool",
+      "typeVersion": 1,
+      "position": [
+        540,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Answer and cost\". What the calling workflow gets back.\n// Shared helper: adds up what the agent's looot calls cost, from the agent's intermediate steps\n// (the agent's \"Return Intermediate Steps\" option is on). Each looot tool answer carries actualCost.\nfunction agentCost(item) {\n  const steps = (item && Array.isArray(item.intermediateSteps)) ? item.intermediateSteps : [];\n  let usd = 0;\n  let calls = 0;\n  for (const step of steps) {\n    const tool = String((step && step.action && step.action.tool) || \"\");\n    if (!/looot/i.test(tool)) continue;\n    calls += 1;\n    const text = typeof step.observation === \"string\" ? step.observation : JSON.stringify(step.observation ?? \"\");\n    for (const m of text.matchAll(/\"actualCost\"\\s*:\\s*([0-9.eE+-]+)/g)) {\n      const n = Number(m[1]);\n      if (Number.isFinite(n)) usd += n;\n    }\n  }\n  return { looot_calls: calls, looot_cost_usd: Number(usd.toFixed(6)) };\n}\n\nconst item = $input.first().json;\nconst cost = agentCost(item);\nreturn [{ json: { answer: item.output ?? null, ...cost } }];\n"
+      },
+      "id": "30452652-ec10-49fe-a6a6-06f1a0687ec1",
+      "name": "Answer and cost",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Search, inspect, run\nSearch and inspect are free. Run is capped by max_cost_usd.",
+        "width": 560,
+        "height": 600,
+        "color": 7
+      },
+      "id": "f312ffb3-681b-4609-a5dc-bc55860c6a66",
+      "name": "Agent section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        80,
+        -180
+      ]
+    }
+  ],
+  "connections": {
+    "When called by another workflow": {
+      "main": [
+        [
+          {
+            "node": "looot data agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "looot data agent": {
+      "main": [
+        [
+          {
+            "node": "Answer and cost",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI chat model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "looot data agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "looot search": {
+      "ai_tool": [
+        [
+          {
+            "node": "looot data agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "looot inspect": {
+      "ai_tool": [
+        [
+          {
+            "node": "looot data agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "looot run": {
+      "ai_tool": [
+        [
+          {
+            "node": "looot data agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

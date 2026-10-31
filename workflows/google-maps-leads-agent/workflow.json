@@ -1,0 +1,294 @@
+{
+  "name": "Find local business leads from Google Maps with an AI agent and looot into Google Sheets",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Find local business leads from Google Maps into Google Sheets\n\n### How it works\n1. You fill in a short form: a business type, a place and how many leads you want.\n2. An AI agent searches Google Maps through looot, then reads each business website through looot to find a contact email.\n3. Each business lands as a row in Google Sheets with name, address, phone, website, rating, email and what the run cost.\n\nOne credential covers both the Maps search and the website reads, so there is no Apify or SerpAPI account to set up.\n\n**Cost per run**, from looot's public catalog on 2026-10-31: Google Maps search $0.001 per call, website read from $0.0002 per page. 20 leads cost about $0.005 in data. Each call is capped at $0.03 and the agent at 25 steps, so one run can never spend more than $0.75. Model tokens are billed by OpenAI.\n\n### Setup\n- Needs the verified community node **n8n-nodes-looot** (built against 0.1.4): Settings > Community nodes > Install, search `looot`. [Install guide](https://docs.n8n.io/integrations/community-nodes/installation/verified-install/)\n- looot: sign up at [looot.ai](https://looot.ai), top up (from $5), create an agent token under Settings > Agent tokens, then add a **looot API** credential in n8n.\n- An OpenAI credential, or swap the model for any chat model.\n- A Google Sheet with the headers: name, address, phone, website, rating, reviews, email, search, found_at, run_cost_usd. Set its ID in **Save leads**.\n- Self-hosted n8n: set `N8N_COMMUNITY_PACKAGES_ALLOW_TOOL_USAGE=true` so the agent can use the looot node as a tool.\n\n### Customization\nEdit the agent's system message to ask for other fields, for example opening hours. Swap Google Sheets for your CRM node.",
+        "width": 520,
+        "height": 640
+      },
+      "id": "5dbab600-5456-4531-a25c-bedf9e86b36c",
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -620,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "formTitle": "Find local business leads",
+        "formDescription": "Searches Google Maps and each business website. Data is billed to your looot balance.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Business type",
+              "placeholder": "dentists",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "City or area",
+              "placeholder": "Austin, Texas",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "How many leads",
+              "fieldType": "number",
+              "placeholder": "20",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "71705b15-3347-4cb1-aedd-70464a4a03cb",
+      "name": "Lead search form",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "4e4d816f-b48a-40b7-a95e-10dcf2f0f56d"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Find {{ Math.min(Number($json['How many leads']) || 10, 40) }} {{ $json['Business type'] }} in {{ $json['City or area'] }}.",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You build lead lists of local businesses. Steps:\n1. Call the looot tool once with job:maps.local.search and input {\"query\": \"<business type> in <place>\"}. If you need more results, call it again with \"page\": 2.\n2. For each business with a website, call the looot tool with job:web.scrape.markdown and input {\"url\": \"<website>\"} and look for a contact email on the page. Read at most one page per business. Skip businesses without a website.\n3. Never invent data. Leave a field empty when you did not find it.\nReturn every business in the leads array.",
+          "maxIterations": 25,
+          "returnIntermediateSteps": true
+        }
+      },
+      "id": "242ad66c-f69c-485d-a03e-3e8454cff73e",
+      "name": "Lead finder agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4.1-mini"
+        },
+        "options": {}
+      },
+      "id": "ab492779-a05d-4232-acb4-3114f76aae05",
+      "name": "OpenAI chat model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        180,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Runs one looot data call and returns the run: status, result and actualCost. Every call is capped. Use only these ids and inputs:\n- job:maps.local.search, input {\"query\": \"dentists in Austin, Texas\", \"page\": 1}: Google Maps businesses with name, address, phone, website, rating.\n- job:web.scrape.markdown, input {\"url\": \"https://example.com\"}: one web page as text.",
+        "operation": "run",
+        "endpointId": "={{ $fromAI('endpointId', 'A looot job or endpoint id from the tool description', 'string') }}",
+        "input": "={{ $fromAI('input', 'The input object, with the field names the tool description gives for that id', 'json') }}",
+        "idempotencyKey": "={{ ('n8n-' + $execution.id + '-' + $fromAI('endpointId', 'A looot job or endpoint id from the tool description', 'string') + '-' + JSON.stringify($fromAI('input', 'The input object, with the field names the tool description gives for that id', 'json'))).slice(0, 200) }}",
+        "fallback": true,
+        "maxCostUsd": 0.03,
+        "wait": 60
+      },
+      "id": "3152766f-5574-460d-ab39-787f1a76eda2",
+      "name": "looot",
+      "type": "n8n-nodes-looot.loootTool",
+      "typeVersion": 1,
+      "position": [
+        360,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n  \"leads\": [\n    {\n      \"name\": \"Example Dental\",\n      \"address\": \"1 Main St, Austin, TX\",\n      \"phone\": \"+1 512 555 0100\",\n      \"website\": \"https://example.com\",\n      \"rating\": 4.8,\n      \"reviews\": 120,\n      \"email\": \"hello@example.com\"\n    }\n  ]\n}"
+      },
+      "id": "25080a1f-cc44-422d-ac62-847dbea177ef",
+      "name": "Leads format",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.2,
+      "position": [
+        540,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Leads to rows\". One Google Sheets row per business the agent returned.\n// Shared helper: adds up what the agent's looot calls cost, from the agent's intermediate steps\n// (the agent's \"Return Intermediate Steps\" option is on). Each looot tool answer carries actualCost.\nfunction agentCost(item) {\n  const steps = (item && Array.isArray(item.intermediateSteps)) ? item.intermediateSteps : [];\n  let usd = 0;\n  let calls = 0;\n  for (const step of steps) {\n    const tool = String((step && step.action && step.action.tool) || \"\");\n    if (!/looot/i.test(tool)) continue;\n    calls += 1;\n    const text = typeof step.observation === \"string\" ? step.observation : JSON.stringify(step.observation ?? \"\");\n    for (const m of text.matchAll(/\"actualCost\"\\s*:\\s*([0-9.eE+-]+)/g)) {\n      const n = Number(m[1]);\n      if (Number.isFinite(n)) usd += n;\n    }\n  }\n  return { looot_calls: calls, looot_cost_usd: Number(usd.toFixed(6)) };\n}\n\nconst item = $input.first().json;\nconst form = $(\"Lead search form\").first().json;\nconst leads = (item.output && Array.isArray(item.output.leads)) ? item.output.leads : [];\nconst cost = agentCost(item);\nconst foundAt = new Date().toISOString();\nconst query = `${form[\"Business type\"] || \"\"} in ${form[\"City or area\"] || \"\"}`.trim();\nreturn leads\n  .filter((l) => l && l.name)\n  .map((l) => ({\n    json: {\n      name: String(l.name),\n      address: l.address || \"\",\n      phone: l.phone || \"\",\n      website: l.website || \"\",\n      rating: l.rating ?? \"\",\n      reviews: l.reviews ?? \"\",\n      email: l.email || \"\",\n      search: query,\n      found_at: foundAt,\n      run_cost_usd: cost.looot_cost_usd,\n    },\n  }));\n"
+      },
+      "id": "59cf2875-7af2-4821-a8ab-c5c400db199b",
+      "name": "Leads to rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_SPREADSHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Leads"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "c25c1ccf-4c48-4e1a-a722-86580c697e87",
+      "name": "Save leads",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.6,
+      "position": [
+        900,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Ask what to find\nBusiness type, place and count come from the form.",
+        "width": 240,
+        "height": 380,
+        "color": 7
+      },
+      "id": "23a403dd-7358-48ad-a6c5-9ca76ee000fa",
+      "name": "Form section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Search Maps, read websites\nThe agent's only data tool is looot: Maps search and website reads, each call capped at $0.03.",
+        "width": 440,
+        "height": 600,
+        "color": 7
+      },
+      "id": "4ac0da3c-6319-43c3-a8fd-3f96a1118ab3",
+      "name": "Agent section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        200,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## One row per business\nThe run's data cost is written on every row.",
+        "width": 440,
+        "height": 380,
+        "color": 7
+      },
+      "id": "14000ad9-5a12-4a71-a263-0e8f51545518",
+      "name": "Save section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        650,
+        -180
+      ]
+    }
+  ],
+  "connections": {
+    "Lead search form": {
+      "main": [
+        [
+          {
+            "node": "Lead finder agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lead finder agent": {
+      "main": [
+        [
+          {
+            "node": "Leads to rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leads to rows": {
+      "main": [
+        [
+          {
+            "node": "Save leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI chat model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Lead finder agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "looot": {
+      "ai_tool": [
+        [
+          {
+            "node": "Lead finder agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leads format": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Lead finder agent",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

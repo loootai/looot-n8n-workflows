@@ -1,0 +1,307 @@
+{
+  "name": "Email yourself a brief on every company you meet today with one AI agent and looot",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Morning brief on every company on today's calendar\n\n### How it works\n1. Every weekday at 7, the workflow reads today's Google Calendar events.\n2. It keeps outside companies from attendee email domains, skipping your own domain and free mail.\n3. For each company, one AI agent pulls company data, recent LinkedIn company posts, recent posts on X and news through looot, and writes a short brief with talking points.\n4. You get one email with a brief per company and what the data cost.\n\nThis replaces separate Clearbit and RapidAPI accounts for LinkedIn and X. One looot credential covers all four lookups.\n\n**Cost per company**, from looot's public catalog on 2026-10-31: company data $0.0019, LinkedIn company posts $0.00188, X posts from $0.0005, news $0.001. About $0.006 per company. Each call is capped at $0.03 and each agent run at 8 steps, so a company can never cost more than $0.24, and the workflow handles at most 10 companies a day. Model tokens are billed by OpenAI.\n\n### Setup\n- Needs the verified community node **n8n-nodes-looot** (built against 0.1.4): Settings > Community nodes > Install, search `looot`. [Install guide](https://docs.n8n.io/integrations/community-nodes/installation/verified-install/)\n- looot: sign up at [looot.ai](https://looot.ai), top up (from $5), create an agent token under Settings > Agent tokens, then add a **looot API** credential in n8n.\n- Google Calendar and Gmail credentials, and an OpenAI credential.\n- Set YOUR_DOMAIN in **Companies to research** and your address in **Send the brief**.\n- Self-hosted n8n: set `N8N_COMMUNITY_PACKAGES_ALLOW_TOOL_USAGE=true`.\n\n### Customization\nSend to Slack instead of Gmail. Change the brief format in the agent's prompt.",
+        "width": 520,
+        "height": 680
+      },
+      "id": "014a7c6f-0ee3-48e4-aff3-13a48401adbe",
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -620,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "triggerAtDay": [
+                1,
+                2,
+                3,
+                4,
+                5
+              ],
+              "triggerAtHour": 7
+            }
+          ]
+        }
+      },
+      "id": "7f1e3c1a-505e-4abb-a6ab-e21c541661b2",
+      "name": "Weekdays at 7",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "mode": "id",
+          "value": "primary"
+        },
+        "returnAll": true,
+        "timeMin": "={{ $now.startOf('day').toISO() }}",
+        "timeMax": "={{ $now.endOf('day').toISO() }}",
+        "options": {}
+      },
+      "id": "48c25b10-3a21-42c0-a464-62f4b62a340f",
+      "name": "Today's events",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Companies to research\". One item per outside company on today's calendar.\nconst YOUR_DOMAIN = \"example.com\"; // your own email domain, so internal meetings are skipped\nconst FREE_MAIL = /^(gmail|googlemail|yahoo|hotmail|outlook|live|icloud|me|aol|proton|protonmail|gmx|mail|yandex)\\./;\n\nconst byDomain = new Map();\nfor (const { json: ev } of $input.all()) {\n  const attendees = Array.isArray(ev.attendees) ? ev.attendees : [];\n  for (const a of attendees) {\n    const email = String((a && a.email) || \"\").toLowerCase();\n    const domain = email.split(\"@\")[1] || \"\";\n    if (!domain || domain === YOUR_DOMAIN || FREE_MAIL.test(domain) || domain.endsWith(\"calendar.google.com\")) continue;\n    const entry = byDomain.get(domain) || { domain, meetings: [], people: [] };\n    const title = ev.summary || \"Meeting\";\n    const start = (ev.start && (ev.start.dateTime || ev.start.date)) || \"\";\n    if (!entry.meetings.some((m) => m.title === title && m.start === start)) entry.meetings.push({ title, start });\n    if (!entry.people.includes(email)) entry.people.push(email);\n    byDomain.set(domain, entry);\n  }\n}\nreturn [...byDomain.values()].slice(0, 10).map((json) => ({ json }));\n"
+      },
+      "id": "4e42ad48-d599-424f-ae59-f2c1318adbfa",
+      "name": "Companies to research",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Write a pre-call brief on the company at {{ $json.domain }}. Meetings today: {{ $json.meetings.map(m => m.title).join('; ') }}. People: {{ $json.people.join(', ') }}.",
+        "hasOutputParser": false,
+        "options": {
+          "systemMessage": "You prepare sales reps for calls. For the company:\n1. job:company.enrich with {\"domain\": \"...\"}. It gives the name, size, industry and often LinkedIn and X links.\n2. If you have the LinkedIn company URL: job:linkedin.company.posts with {\"url\": \"...\"}.\n3. If you have the X handle: job:x.user.posts with {\"handle\": \"...\"}.\n4. job:news.search with {\"query\": \"\\\"<company name>\\\"\"}.\nWrite at most 150 words: who they are in one line, what they posted or announced lately, and 2 talking points. Only use what the data says.",
+          "maxIterations": 8,
+          "returnIntermediateSteps": true
+        }
+      },
+      "id": "51c4a97f-f5d9-479c-a14a-045fa4783815",
+      "name": "Brief agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4.1-mini"
+        },
+        "options": {}
+      },
+      "id": "54f77fa8-ddb3-4fdc-a331-783c114a2e52",
+      "name": "OpenAI chat model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        600,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Runs one looot data call and returns the run: status, result and actualCost. Every call is capped. Use only these ids and inputs:\n- job:company.enrich, input {\"domain\": \"example.com\"}: company data and social links.\n- job:linkedin.company.posts, input {\"url\": \"https://www.linkedin.com/company/example\"}: recent company posts.\n- job:x.user.posts, input {\"handle\": \"example\"}: recent posts on X.\n- job:news.search, input {\"query\": \"...\"}: Google News articles.",
+        "operation": "run",
+        "endpointId": "={{ $fromAI('endpointId', 'A looot job or endpoint id from the tool description', 'string') }}",
+        "input": "={{ $fromAI('input', 'The input object, with the field names the tool description gives for that id', 'json') }}",
+        "idempotencyKey": "={{ ('n8n-' + $execution.id + '-' + $fromAI('endpointId', 'A looot job or endpoint id from the tool description', 'string') + '-' + JSON.stringify($fromAI('input', 'The input object, with the field names the tool description gives for that id', 'json'))).slice(0, 200) }}",
+        "fallback": true,
+        "maxCostUsd": 0.03,
+        "wait": 60
+      },
+      "id": "914dad8a-ab91-4ed0-a5ff-99a10fd0e600",
+      "name": "looot",
+      "type": "n8n-nodes-looot.loootTool",
+      "typeVersion": 1,
+      "position": [
+        740,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Build the email\". One email with a short brief per company, plus what it cost.\n// Shared helper: adds up what the agent's looot calls cost, from the agent's intermediate steps\n// (the agent's \"Return Intermediate Steps\" option is on). Each looot tool answer carries actualCost.\nfunction agentCost(item) {\n  const steps = (item && Array.isArray(item.intermediateSteps)) ? item.intermediateSteps : [];\n  let usd = 0;\n  let calls = 0;\n  for (const step of steps) {\n    const tool = String((step && step.action && step.action.tool) || \"\");\n    if (!/looot/i.test(tool)) continue;\n    calls += 1;\n    const text = typeof step.observation === \"string\" ? step.observation : JSON.stringify(step.observation ?? \"\");\n    for (const m of text.matchAll(/\"actualCost\"\\s*:\\s*([0-9.eE+-]+)/g)) {\n      const n = Number(m[1]);\n      if (Number.isFinite(n)) usd += n;\n    }\n  }\n  return { looot_calls: calls, looot_cost_usd: Number(usd.toFixed(6)) };\n}\n\nconst companies = $(\"Companies to research\").all().map((i) => i.json);\nconst briefs = $input.all().map((i) => i.json);\nconst esc = (s) => String(s ?? \"\").replace(/&/g, \"&amp;\").replace(/</g, \"&lt;\").replace(/>/g, \"&gt;\");\nlet total = 0;\nconst sections = briefs.map((b, i) => {\n  const c = companies[i] || {};\n  const cost = agentCost(b);\n  total += cost.looot_cost_usd;\n  const when = (c.meetings || []).map((m) => `${esc(m.title)} (${esc(m.start)})`).join(\", \");\n  const text = typeof b.output === \"string\" ? b.output : JSON.stringify(b.output ?? \"\");\n  return `<h3>${esc(c.domain)}</h3><p><i>${when}</i></p><div>${esc(text).replace(/\\n/g, \"<br>\")}</div>`;\n});\nif (!sections.length) return [];\nconst html = `<p>Briefs for today's calls.</p>${sections.join(\"<hr>\")}<p style=\"color:#666\">Data cost: $${total.toFixed(4)} in looot calls.</p>`;\nreturn [{ json: { subject: `Call prep: ${companies.length} compan${companies.length === 1 ? \"y\" : \"ies\"} today`, html, looot_cost_usd: Number(total.toFixed(6)) } }];\n"
+      },
+      "id": "1bffa210-8055-4d0b-a196-e5f5668ccb17",
+      "name": "Build the email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "you@example.com",
+        "subject": "={{ $json.subject }}",
+        "message": "={{ $json.html }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "b66b3d9c-5b10-4af8-adde-388bc070079a",
+      "name": "Send the brief",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1120,
+        0
+      ],
+      "webhookId": "e29486df-b5ba-4964-ae1b-bfb0dd5f5932"
+    },
+    {
+      "parameters": {
+        "content": "## Who you meet today\nOutside companies from attendee domains, at most 10.",
+        "width": 680,
+        "height": 380,
+        "color": 7
+      },
+      "id": "af372314-8185-4249-a0eb-c8b2bc81dd6e",
+      "name": "Calendar section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Research each company\nRuns once per company. Four looot jobs behind one tool.",
+        "width": 280,
+        "height": 600,
+        "color": 7
+      },
+      "id": "68ff32dd-4286-4df0-a084-db233c998d5f",
+      "name": "Agent section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        600,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Set your address\nReplace you@example.com with the inbox that should get the brief.",
+        "width": 240,
+        "height": 380,
+        "color": 3
+      },
+      "id": "7c5e5882-ce09-450a-ae8f-55d3ac1831f3",
+      "name": "Set your address",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1060,
+        -180
+      ]
+    }
+  ],
+  "connections": {
+    "Weekdays at 7": {
+      "main": [
+        [
+          {
+            "node": "Today's events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Today's events": {
+      "main": [
+        [
+          {
+            "node": "Companies to research",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Companies to research": {
+      "main": [
+        [
+          {
+            "node": "Brief agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Brief agent": {
+      "main": [
+        [
+          {
+            "node": "Build the email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build the email": {
+      "main": [
+        [
+          {
+            "node": "Send the brief",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI chat model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Brief agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "looot": {
+      "ai_tool": [
+        [
+          {
+            "node": "Brief agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}
