@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0
+
+Twenty more workflows on the verified looot node:
+
+- Twelve "one agent, one key" rebuilds of gallery templates that use several data providers: apollo-outreach-agent (139 nodes to 7), linkedin-sheet-outreach-agent, trial-signup-scoring-agent, content-trends-agent, research-report-email-agent, account-brief-notion-agent, maps-leads-outreach-agent, calendly-prep-brief-agent, job-postings-research-agent, seo-content-brief-agent, instagram-content-ideas-agent, youtube-channel-leads-agent.
+- Two rebuilds with no agent: hubspot-contact-enrichment, typeform-lead-qualifier.
+- Six plain GTM jobs: champion-job-change-alert, funding-news-hubspot-task, ai-visibility-check, weekly-seo-rank-slack, backlink-prospect-finder, webinar-attendee-enrichment.
+
+Node helpers moved to scripts/node-kit.mjs; the new definitions live in scripts/build-node-more.mjs. The 13 existing JSON files are byte for byte unchanged. Typeform Trigger and Calendly Trigger added to the checked node versions. 235 tests. Not run end to end in n8n.
+
 ## 0.2.0
 
 Thirteen workflows on the verified looot community node (n8n-nodes-looot 0.1.4):

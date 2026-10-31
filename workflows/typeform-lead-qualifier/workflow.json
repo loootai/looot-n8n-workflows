@@ -1,0 +1,399 @@
+{
+  "name": "Verify, enrich and score Typeform leads with looot, save them to HubSpot and alert Slack on hot ones",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Qualify Typeform leads before they reach HubSpot\n\n### How it works\n1. Someone submits your Typeform. The workflow finds the email, name and answers by reading the question titles.\n2. looot verifies the email. Undeliverable addresses and free mail stop at **Skip**.\n3. looot enriches the company from the email domain, and **Score the lead** scores it against your ICP: size, industry, country and email status.\n4. Every qualified lead is created or updated in HubSpot. Hot leads (70 or more) also go to Slack.\n\nNo AI step: two looot calls per lead. One looot credential replaces the Hunter and AbstractAPI keys this flow usually needs.\n\n**Cost per lead**, from looot's public catalog on 2026-10-31: verify $0.00145, company data $0.0019. About $0.0034 per qualified lead, $0.00145 for one that stops at the email check. Each call is capped at $0.05.\n\n### Setup\n- Needs the verified community node **n8n-nodes-looot** (built against 0.1.4): Settings > Community nodes > Install, search `looot`. [Install guide](https://docs.n8n.io/integrations/community-nodes/installation/verified-install/)\n- looot: sign up at [looot.ai](https://looot.ai), top up (from $5), create an agent token under Settings > Agent tokens, then add a **looot API** credential in n8n.\n- Typeform, HubSpot (private app token) and Slack credentials. Set your form in **New Typeform entry** and the channel ID in **Post to Slack**.\n- Your form needs an email question.\n\n### Customization\nEdit ICP in **Score the lead**. Map more answers to HubSpot fields in **Create or update contact**.",
+        "width": 520,
+        "height": 640
+      },
+      "id": "a4934a08-6b3f-44d8-ade6-9f5ba2145621",
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -620,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "formId": "YOUR_FORM_ID",
+        "simplifyAnswers": true,
+        "onlyAnswers": true
+      },
+      "id": "79304aa7-87e5-43d4-a1a2-eaf499404d7d",
+      "name": "New Typeform entry",
+      "type": "n8n-nodes-base.typeformTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "d97080e4-97fd-47ba-aef8-48b4a7f8c33a"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Lead from answers\". Typeform sends {question title: answer}; this finds the email, the\n// name and the company size answer by looking at the questions, so it works with most lead forms.\nconst a = $input.first().json;\nconst entries = Object.entries(a).map(([k, v]) => [String(k).toLowerCase(), typeof v === \"object\" && v !== null ? (v.label || v.text || v.email || JSON.stringify(v)) : String(v ?? \"\")]);\nconst pick = (re) => (entries.find(([k]) => re.test(k)) || [])[1] || \"\";\nconst email = (entries.map(([, v]) => v).find((v) => /^[^\\s@]+@[^\\s@]+\\.[a-z]{2,}$/i.test(String(v).trim())) || \"\").trim().toLowerCase();\nconst full = pick(/full name|your name|^name/);\nreturn [{\n  json: {\n    email,\n    domain: email.includes(\"@\") ? email.split(\"@\")[1] : \"\",\n    first_name: pick(/first name/) || full.split(\" \")[0] || \"\",\n    last_name: pick(/last name|surname/) || full.split(\" \").slice(1).join(\" \"),\n    stated_size: pick(/team size|company size|employees|how many people/),\n    need: pick(/what do you|looking for|use case|how can we help/).slice(0, 500),\n  },\n}];\n"
+      },
+      "id": "6036fce9-3c01-4128-ac9b-2098dcfe27ba",
+      "name": "Lead from answers",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "run",
+        "endpointId": "job:people.email.verify",
+        "input": "={{ JSON.stringify({ email: $json.email }) }}",
+        "idempotencyKey": "={{ 'n8n-typeform-verify:' + $json.email }}",
+        "fallback": true,
+        "maxCostUsd": 0.05,
+        "wait": 60
+      },
+      "id": "5783291c-eb8a-4e7a-a715-5d87ceece1ce",
+      "name": "Verify email",
+      "type": "n8n-nodes-looot.looot",
+      "typeVersion": 1,
+      "position": [
+        440,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Read the verdict\". Deliverable means valid, catch_all or risky. Free mail is not scored.\n// Shared helpers for reading a looot run item. The looot node returns the run as the item:\n// {runId, status, result, normalized: {fields}, actualCost, route: {servedBy}, error, topUpUrl}.\n// With \"On Error: Continue\", a refused call (402 empty balance, 400 bad input) arrives as {error: \"...\"}.\nfunction runCost(run) {\n  return run && typeof run.actualCost === \"number\" ? run.actualCost : 0;\n}\nfunction runProblem(run) {\n  if (!run || typeof run !== \"object\") return \"no answer\";\n  if (!run.status) {\n    const e = run.error;\n    if (typeof e === \"string\") return e;\n    if (e && typeof e === \"object\") return [e.code, e.message].filter(Boolean).join(\": \") || \"error\";\n    return \"error\";\n  }\n  if (run.status !== \"completed\") return (run.error && run.error.message) || run.status;\n  return null;\n}\nfunction squash(k) {\n  return String(k).toLowerCase().replace(/[\\s_\\-.]/g, \"\");\n}\n// First string or number under any of `keys`, searched a few levels deep.\nfunction find(src, keys, depth = 0) {\n  if (!src || typeof src !== \"object\" || depth > 4) return \"\";\n  if (Array.isArray(src)) {\n    for (const x of src.slice(0, 5)) { const v = find(x, keys, depth + 1); if (v) return v; }\n    return \"\";\n  }\n  for (const key of keys) {\n    for (const [k, v] of Object.entries(src)) {\n      if (squash(k) === squash(key) && (typeof v === \"string\" || typeof v === \"number\") && String(v).trim()) return String(v).trim();\n    }\n  }\n  for (const v of Object.values(src)) { const r = find(v, keys, depth + 1); if (r) return r; }\n  return \"\";\n}\n// First array (a few levels deep) that has an element passing `test`.\nfunction firstArray(src, test, depth = 0) {\n  if (!src || typeof src !== \"object\" || depth > 4) return [];\n  if (Array.isArray(src) && src.some(test)) return src;\n  for (const v of Object.values(src)) { const r = firstArray(v, test, depth + 1); if (r.length) return r; }\n  return [];\n}\nfunction runFields(run) {\n  return { n: (run && run.normalized && run.normalized.fields) || {}, r: run && run.result };\n}\nfunction findEmail(run) {\n  const re = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}/;\n  const norm = run && run.normalized && run.normalized.fields && run.normalized.fields.email;\n  if (typeof norm === \"string\" && re.test(norm)) return norm.match(re)[0].toLowerCase();\n  const m = JSON.stringify((run && run.result) ?? \"\").match(re);\n  return m ? m[0].toLowerCase() : null;\n}\n// Maps the many verifier vocabularies onto valid / invalid / catch_all / risky / unknown.\nfunction emailStatus(run) {\n  const raw = find(runFields(run), [\"status\", \"result\", \"verdict\", \"state\", \"deliverability\", \"email_status\"]).toLowerCase();\n  if (/catch.?all|accept.?all/.test(raw)) return \"catch_all\";\n  if (/^(valid|deliverable|ok|safe|verified)$/.test(raw)) return \"valid\";\n  if (/invalid|undeliverable|bounce|bad|disposable|not.?found/.test(raw)) return \"invalid\";\n  if (/risky|unknown_risky|accept/.test(raw)) return \"risky\";\n  return \"unknown\";\n}\nfunction cleanDomain(v) {\n  const s = String(v || \"\").trim().toLowerCase().replace(/^https?:\\/\\//, \"\").replace(/^www\\./, \"\").split(/[/?#]/)[0];\n  return /^[a-z0-9.-]+\\.[a-z]{2,}$/.test(s) ? s : \"\";\n}\n\nconst FREE = /^(gmail|googlemail|yahoo|hotmail|outlook|live|icloud|me|aol|proton|protonmail|gmx|mail|yandex|zoho)\\./i;\nconst run = $input.first().json;\nconst lead = $(\"Lead from answers\").first().json;\nconst problem = runProblem(run);\nconst status = problem ? \"unverified\" : emailStatus(run);\nreturn [{\n  json: {\n    ...lead,\n    email_status: status,\n    deliverable: !problem && [\"valid\", \"catch_all\", \"risky\"].includes(status) && !FREE.test(lead.domain),\n    verify_problem: problem || \"\",\n    looot_cost_usd: runCost(run),\n  },\n}];\n"
+      },
+      "id": "ad9231d4-07f0-4895-a471-feeee40eac4a",
+      "name": "Read the verdict",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "35e32fd9-7318-437a-a020-24120c0fb3bb",
+              "leftValue": "={{ $json.deliverable }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "73f88f2f-8d6a-48c3-a476-300a79b7b1cb",
+      "name": "Qualified email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "run",
+        "endpointId": "job:company.enrich",
+        "input": "={{ JSON.stringify({ domain: $json.domain }) }}",
+        "idempotencyKey": "={{ 'n8n-typeform-company:' + $json.domain }}",
+        "fallback": true,
+        "maxCostUsd": 0.05,
+        "wait": 60
+      },
+      "id": "74c18a26-3f95-412b-ac5d-19e09a3cf9a0",
+      "name": "Enrich company",
+      "type": "n8n-nodes-looot.looot",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        -100
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Score the lead\". Edit ICP to match who you sell to. hot leads also go to Slack.\n// Shared helpers for reading a looot run item. The looot node returns the run as the item:\n// {runId, status, result, normalized: {fields}, actualCost, route: {servedBy}, error, topUpUrl}.\n// With \"On Error: Continue\", a refused call (402 empty balance, 400 bad input) arrives as {error: \"...\"}.\nfunction runCost(run) {\n  return run && typeof run.actualCost === \"number\" ? run.actualCost : 0;\n}\nfunction runProblem(run) {\n  if (!run || typeof run !== \"object\") return \"no answer\";\n  if (!run.status) {\n    const e = run.error;\n    if (typeof e === \"string\") return e;\n    if (e && typeof e === \"object\") return [e.code, e.message].filter(Boolean).join(\": \") || \"error\";\n    return \"error\";\n  }\n  if (run.status !== \"completed\") return (run.error && run.error.message) || run.status;\n  return null;\n}\nfunction squash(k) {\n  return String(k).toLowerCase().replace(/[\\s_\\-.]/g, \"\");\n}\n// First string or number under any of `keys`, searched a few levels deep.\nfunction find(src, keys, depth = 0) {\n  if (!src || typeof src !== \"object\" || depth > 4) return \"\";\n  if (Array.isArray(src)) {\n    for (const x of src.slice(0, 5)) { const v = find(x, keys, depth + 1); if (v) return v; }\n    return \"\";\n  }\n  for (const key of keys) {\n    for (const [k, v] of Object.entries(src)) {\n      if (squash(k) === squash(key) && (typeof v === \"string\" || typeof v === \"number\") && String(v).trim()) return String(v).trim();\n    }\n  }\n  for (const v of Object.values(src)) { const r = find(v, keys, depth + 1); if (r) return r; }\n  return \"\";\n}\n// First array (a few levels deep) that has an element passing `test`.\nfunction firstArray(src, test, depth = 0) {\n  if (!src || typeof src !== \"object\" || depth > 4) return [];\n  if (Array.isArray(src) && src.some(test)) return src;\n  for (const v of Object.values(src)) { const r = firstArray(v, test, depth + 1); if (r.length) return r; }\n  return [];\n}\nfunction runFields(run) {\n  return { n: (run && run.normalized && run.normalized.fields) || {}, r: run && run.result };\n}\nfunction findEmail(run) {\n  const re = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}/;\n  const norm = run && run.normalized && run.normalized.fields && run.normalized.fields.email;\n  if (typeof norm === \"string\" && re.test(norm)) return norm.match(re)[0].toLowerCase();\n  const m = JSON.stringify((run && run.result) ?? \"\").match(re);\n  return m ? m[0].toLowerCase() : null;\n}\n// Maps the many verifier vocabularies onto valid / invalid / catch_all / risky / unknown.\nfunction emailStatus(run) {\n  const raw = find(runFields(run), [\"status\", \"result\", \"verdict\", \"state\", \"deliverability\", \"email_status\"]).toLowerCase();\n  if (/catch.?all|accept.?all/.test(raw)) return \"catch_all\";\n  if (/^(valid|deliverable|ok|safe|verified)$/.test(raw)) return \"valid\";\n  if (/invalid|undeliverable|bounce|bad|disposable|not.?found/.test(raw)) return \"invalid\";\n  if (/risky|unknown_risky|accept/.test(raw)) return \"risky\";\n  return \"unknown\";\n}\nfunction cleanDomain(v) {\n  const s = String(v || \"\").trim().toLowerCase().replace(/^https?:\\/\\//, \"\").replace(/^www\\./, \"\").split(/[/?#]/)[0];\n  return /^[a-z0-9.-]+\\.[a-z]{2,}$/.test(s) ? s : \"\";\n}\n\nconst ICP = {\n  minEmployees: 20,\n  maxEmployees: 2000,\n  industries: /software|saas|internet|information technology|marketing|financial/i,\n  countries: /^(us|usa|united states|gb|uk|united kingdom|fr|france|de|germany)$/i,\n  hot: 70,\n};\nconst run = $input.first().json;\nconst lead = $(\"Read the verdict\").first().json;\nconst { n, r } = runFields(run);\nconst src = { n, r };\nconst company = find(src, [\"name\", \"company_name\", \"companyName\"]);\nconst industry = find(src, [\"industry\", \"sector\", \"category\"]);\nconst country = find(src, [\"country\", \"country_code\", \"countryCode\"]);\nconst employees = Number(String(find(src, [\"employee_count\", \"employees\", \"employeeCount\", \"headcount\", \"size\"])).replace(/[^0-9]/g, \"\")) || 0;\nlet score = 20;\nconst why = [];\nif (employees >= ICP.minEmployees && employees <= ICP.maxEmployees) { score += 35; why.push(`${employees} employees`); }\nif (industry && ICP.industries.test(industry)) { score += 25; why.push(industry); }\nif (country && ICP.countries.test(country)) { score += 10; why.push(country); }\nif (lead.email_status === \"valid\") score += 10;\nscore = Math.min(100, score);\nconst cost = Number((lead.looot_cost_usd + runCost(run)).toFixed(6));\nconst hot = score >= ICP.hot;\nreturn [{\n  json: {\n    ...lead,\n    company,\n    industry,\n    country,\n    employees: employees || \"\",\n    score,\n    hot,\n    looot_cost_usd: cost,\n    text: `*Hot Typeform lead* (${score}/100): ${[lead.first_name, lead.last_name].filter(Boolean).join(\" \") || lead.email} at ${company || lead.domain}\\n${lead.email}${why.length ? ` · ${why.join(\" · \")}` : \"\"}${lead.need ? `\\n> ${lead.need.slice(0, 200)}` : \"\"}`,\n  },\n}];\n"
+      },
+      "id": "8a336f19-a3be-4d2e-ae78-1afe725007bc",
+      "name": "Score the lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "appToken",
+        "resource": "contact",
+        "operation": "upsert",
+        "email": "={{ $json.email }}",
+        "additionalFields": {
+          "firstName": "={{ $json.first_name }}",
+          "lastName": "={{ $json.last_name }}",
+          "companyName": "={{ $json.company }}",
+          "industry": "={{ $json.industry }}",
+          "country": "={{ $json.country }}"
+        },
+        "options": {}
+      },
+      "id": "2cd1dc5c-5f65-427b-a39d-3e6194de02c0",
+      "name": "Create or update contact",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2.1,
+      "position": [
+        1540,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "69ce86e9-f860-4679-a0d6-f8c8b7ed0bbe",
+              "leftValue": "={{ $json.hot }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "da9cfb52-8959-4b2e-aff6-62607f94d8e0",
+      "name": "Hot lead?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1540,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_CHANNEL_ID"
+        },
+        "text": "={{ $json.text }}",
+        "otherOptions": {
+          "mrkdwn": true
+        }
+      },
+      "id": "d1dbeb7f-9949-49cd-aff9-1d26d3219dd4",
+      "name": "Post to Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        1760,
+        -60
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "1dc93e74-b06c-41e4-a021-c6c91b82a906",
+      "name": "Not hot",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1760,
+        120
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "5406b8ba-e533-40d2-a0f6-da1651f8a6fd",
+      "name": "Skip",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Check the email first\nUndeliverable and free mail stop here.",
+        "width": 640,
+        "height": 400,
+        "color": 7
+      },
+      "id": "6fabc562-4b5f-433d-a474-6d34dc7bd113",
+      "name": "Verify section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        160,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Enrich, score, route\nEvery qualified lead to HubSpot, hot ones to Slack too.",
+        "width": 900,
+        "height": 360,
+        "color": 7
+      },
+      "id": "cb556f45-c746-4808-abe8-6e4bfdb1637e",
+      "name": "Score section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1040,
+        -320
+      ]
+    }
+  ],
+  "connections": {
+    "New Typeform entry": {
+      "main": [
+        [
+          {
+            "node": "Lead from answers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lead from answers": {
+      "main": [
+        [
+          {
+            "node": "Verify email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify email": {
+      "main": [
+        [
+          {
+            "node": "Read the verdict",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read the verdict": {
+      "main": [
+        [
+          {
+            "node": "Qualified email?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qualified email?": {
+      "main": [
+        [
+          {
+            "node": "Enrich company",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Skip",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enrich company": {
+      "main": [
+        [
+          {
+            "node": "Score the lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score the lead": {
+      "main": [
+        [
+          {
+            "node": "Create or update contact",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Hot lead?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hot lead?": {
+      "main": [
+        [
+          {
+            "node": "Post to Slack",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Not hot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

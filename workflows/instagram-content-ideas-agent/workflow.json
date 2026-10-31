@@ -1,0 +1,305 @@
+{
+  "name": "Turn the best recent posts of Instagram accounts into content ideas with one AI agent and looot",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Weekly content ideas from the Instagram accounts you watch\n\n### How it works\n1. Every Monday at 8, **Accounts to watch** hands the agent a list of Instagram handles and your audience.\n2. One AI agent reads each account's recent posts through looot and picks the ones with the most likes and comments.\n3. For the best ones it searches the web for context, then writes why each post worked and an idea with a hook for your audience.\n4. Each idea lands as a row in Google Sheets.\n\nOne looot credential replaces the Apify and Perplexity accounts this flow usually needs.\n\n**Cost per run**, from looot's public catalog on 2026-10-31: Instagram posts $0.00188 per account, web search from $0 per result. Three accounts cost about $0.01 in data. Each call is capped at $0.03 and the agent at 20 steps, so a run can never spend more than $0.60. Model tokens are billed by OpenAI.\n\n### Setup\n- Needs the verified community node **n8n-nodes-looot** (built against 0.1.4): Settings > Community nodes > Install, search `looot`. [Install guide](https://docs.n8n.io/integrations/community-nodes/installation/verified-install/)\n- looot: sign up at [looot.ai](https://looot.ai), top up (from $5), create an agent token under Settings > Agent tokens, then add a **looot API** credential in n8n.\n- Google Sheets and OpenAI credentials.\n- A sheet named Ideas with the headers: week, source_handle, post_url, likes, comments, why_it_worked, idea, hook, cost_usd. Set its ID in **Save ideas**.\n- Edit the handles in **Accounts to watch**.\n- Self-hosted n8n: set `N8N_COMMUNITY_PACKAGES_ALLOW_TOOL_USAGE=true` so the agent can use the looot node as a tool.\n\n### Customization\nAsk for reel scripts instead of ideas in the system message. Read the handles from a sheet instead of the Code node.",
+        "width": 520,
+        "height": 680
+      },
+      "id": "c3deb322-ad5f-4bca-aaa8-c5892bf1fe08",
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -620,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "triggerAtDay": [
+                1
+              ],
+              "triggerAtHour": 8
+            }
+          ]
+        }
+      },
+      "id": "23f958e3-f40d-4c10-a5ef-f9395414f665",
+      "name": "Every Monday at 8",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Accounts to watch\". Edit the handles (without @) and one line about your audience.\nreturn [{\n  json: {\n    handles: [\"natgeo\", \"nasa\", \"spotify\"],\n    audience: \"B2B marketers at software companies\",\n    posts_per_account: 12,\n  },\n}];\n"
+      },
+      "id": "558ffbaf-4fd6-4561-a161-7aea87569a2f",
+      "name": "Accounts to watch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Instagram accounts: {{ $json.handles.join(', ') }}\nOur audience: {{ $json.audience }}\nRead up to {{ $json.posts_per_account }} recent posts per account.",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You find content that works on Instagram and adapt it.\n1. For each handle: job:instagram.user.posts with {\"handle\": \"<handle without @>\"}.\n2. Pick the 5 posts with the most likes plus comments across all accounts.\n3. For each, one job:web.search with {\"query\": \"<the post's topic>\"} for context.\n4. why_it_worked: one line from the caption, format and numbers. idea and hook: adapted to our audience, not a copy.\nUse real post URLs and counts from the data only.",
+          "maxIterations": 20,
+          "returnIntermediateSteps": true
+        }
+      },
+      "id": "6095d9be-7254-4655-af53-be1fe1298569",
+      "name": "Content discovery agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4.1-mini"
+        },
+        "options": {}
+      },
+      "id": "8bbd7126-72b7-4f61-af5f-77475b1b5c82",
+      "name": "OpenAI chat model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        380,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Runs one looot data call and returns the run: status, result and actualCost. Every call is capped. Use only these ids and inputs:\n- job:instagram.user.posts, input {\"handle\": \"natgeo\"}: recent posts with captions, likes and comments.\n- job:web.search, input {\"query\": \"...\", \"limit\": 5}: web search results.",
+        "operation": "run",
+        "endpointId": "={{ $fromAI('endpointId', 'A looot job or endpoint id from the tool description', 'string') }}",
+        "input": "={{ $fromAI('input', 'The input object, with the field names the tool description gives for that id', 'json') }}",
+        "idempotencyKey": "={{ ('n8n-' + $execution.id + '-' + $fromAI('endpointId', 'A looot job or endpoint id from the tool description', 'string') + '-' + JSON.stringify($fromAI('input', 'The input object, with the field names the tool description gives for that id', 'json'))).slice(0, 200) }}",
+        "fallback": true,
+        "maxCostUsd": 0.03,
+        "wait": 60
+      },
+      "id": "da1ddc10-d334-4489-a014-3b06323179a3",
+      "name": "looot",
+      "type": "n8n-nodes-looot.loootTool",
+      "typeVersion": 1,
+      "position": [
+        520,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n  \"ideas\": [\n    {\n      \"source_handle\": \"natgeo\",\n      \"post_url\": \"https://www.instagram.com/p/example\",\n      \"likes\": 12000,\n      \"comments\": 300,\n      \"why_it_worked\": \"One line.\",\n      \"idea\": \"One line.\",\n      \"hook\": \"First line of the post.\"\n    }\n  ]\n}"
+      },
+      "id": "64642351-c153-4e2b-aefb-c1ba16537671",
+      "name": "Ideas format",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.2,
+      "position": [
+        680,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Ideas to rows\". One Google Sheets row per content idea.\n// Shared helper: adds up what the agent's looot calls cost, from the agent's intermediate steps\n// (the agent's \"Return Intermediate Steps\" option is on). Each looot tool answer carries actualCost.\nfunction agentCost(item) {\n  const steps = (item && Array.isArray(item.intermediateSteps)) ? item.intermediateSteps : [];\n  let usd = 0;\n  let calls = 0;\n  for (const step of steps) {\n    const tool = String((step && step.action && step.action.tool) || \"\");\n    if (!/looot/i.test(tool)) continue;\n    calls += 1;\n    const text = typeof step.observation === \"string\" ? step.observation : JSON.stringify(step.observation ?? \"\");\n    for (const m of text.matchAll(/\"actualCost\"\\s*:\\s*([0-9.eE+-]+)/g)) {\n      const n = Number(m[1]);\n      if (Number.isFinite(n)) usd += n;\n    }\n  }\n  return { looot_calls: calls, looot_cost_usd: Number(usd.toFixed(6)) };\n}\n\nconst item = $input.first().json;\nconst ideas = ((item.output && Array.isArray(item.output.ideas)) ? item.output.ideas : []).filter((x) => x && x.idea);\nconst cost = agentCost(item);\nconst each = ideas.length ? cost.looot_cost_usd / ideas.length : 0;\nconst week = new Date().toISOString().slice(0, 10);\nreturn ideas.map((x) => ({\n  json: {\n    week,\n    source_handle: x.source_handle || \"\",\n    post_url: x.post_url || \"\",\n    likes: x.likes ?? \"\",\n    comments: x.comments ?? \"\",\n    why_it_worked: x.why_it_worked || \"\",\n    idea: x.idea,\n    hook: x.hook || \"\",\n    cost_usd: Number(each.toFixed(6)),\n  },\n}));\n"
+      },
+      "id": "aeb25ac6-af33-4bc1-a9c2-c134a1e23ef8",
+      "name": "Ideas to rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        860,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_SPREADSHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Ideas"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "5b18e87f-05c0-422e-a454-648bcfb9ed8b",
+      "name": "Save ideas",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.6,
+      "position": [
+        1080,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Who to watch\nEdit the handles and your audience.",
+        "width": 460,
+        "height": 380,
+        "color": 7
+      },
+      "id": "9945c719-8492-4207-a29d-70f05bfb5379",
+      "name": "Accounts section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Posts, context, ideas\nTwo looot jobs behind one tool.",
+        "width": 440,
+        "height": 600,
+        "color": 7
+      },
+      "id": "edfc24be-57b2-4ed4-ae64-94ec09494e7a",
+      "name": "Agent section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        380,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## One row per idea\nWith the source post and its numbers.",
+        "width": 440,
+        "height": 380,
+        "color": 7
+      },
+      "id": "2b4f9745-5f57-445d-afe6-31329b8cf3c4",
+      "name": "Save section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        820,
+        -180
+      ]
+    }
+  ],
+  "connections": {
+    "Every Monday at 8": {
+      "main": [
+        [
+          {
+            "node": "Accounts to watch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Accounts to watch": {
+      "main": [
+        [
+          {
+            "node": "Content discovery agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Content discovery agent": {
+      "main": [
+        [
+          {
+            "node": "Ideas to rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ideas to rows": {
+      "main": [
+        [
+          {
+            "node": "Save ideas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI chat model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Content discovery agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "looot": {
+      "ai_tool": [
+        [
+          {
+            "node": "Content discovery agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ideas format": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Content discovery agent",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

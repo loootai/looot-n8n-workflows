@@ -1,0 +1,211 @@
+{
+  "name": "Find sites that link to your competitors but not to you with looot backlink data into Google Sheets",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Backlink prospects: who links to competitors and not to you\n\n### How it works\n1. You fill in a form with your domain and up to 5 competitor domains.\n2. looot lists the referring domains of your site and of each competitor.\n3. **Link gaps** keeps sites that link to at least one competitor and not to you, sorted by how many competitors they link to, then by rank.\n4. The top 100 land in Google Sheets as your outreach list.\n\nA site that links to two or three of your competitors already covers your space. Those are the easiest links to ask for.\n\n**Cost per run**, from looot's public catalog on 2026-10-31: referring domains $0.024 per domain. You plus 3 competitors cost about $0.10. Each call is capped at $0.05, and a failed call costs $0.\n\n### Setup\n- Needs the verified community node **n8n-nodes-looot** (built against 0.1.4): Settings > Community nodes > Install, search `looot`. [Install guide](https://docs.n8n.io/integrations/community-nodes/installation/verified-install/)\n- looot: sign up at [looot.ai](https://looot.ai), top up (from $5), create an agent token under Settings > Agent tokens, then add a **looot API** credential in n8n.\n- A Google Sheets credential. A sheet named Prospects with the headers: referring_domain, links_to_competitors, competitor_count, rank, your_domain, found_at, run_cost_usd. Set its ID in **Save prospects**.\n\n### Customization\nChange MAX_ROWS in **Link gaps**. Add an agent after it to find a contact email for each site.",
+        "width": 520,
+        "height": 600
+      },
+      "id": "bef79d1f-0140-4f55-a514-dd560ccfba9e",
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -620,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "formTitle": "Find backlink prospects",
+        "formDescription": "Compares the referring domains of your site and your competitors.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Your domain",
+              "placeholder": "example.com",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Competitor domains",
+              "placeholder": "example.org, example.net",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "40b12fba-a30f-4a4f-ad91-1362a7469e8b",
+      "name": "Domains form",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "bb60da05-ab6c-46e8-aea2-30d856b93a3a"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Domains to check\". Your domain plus each competitor, one item each.\n// Shared helpers for reading a looot run item. The looot node returns the run as the item:\n// {runId, status, result, normalized: {fields}, actualCost, route: {servedBy}, error, topUpUrl}.\n// With \"On Error: Continue\", a refused call (402 empty balance, 400 bad input) arrives as {error: \"...\"}.\nfunction runCost(run) {\n  return run && typeof run.actualCost === \"number\" ? run.actualCost : 0;\n}\nfunction runProblem(run) {\n  if (!run || typeof run !== \"object\") return \"no answer\";\n  if (!run.status) {\n    const e = run.error;\n    if (typeof e === \"string\") return e;\n    if (e && typeof e === \"object\") return [e.code, e.message].filter(Boolean).join(\": \") || \"error\";\n    return \"error\";\n  }\n  if (run.status !== \"completed\") return (run.error && run.error.message) || run.status;\n  return null;\n}\nfunction squash(k) {\n  return String(k).toLowerCase().replace(/[\\s_\\-.]/g, \"\");\n}\n// First string or number under any of `keys`, searched a few levels deep.\nfunction find(src, keys, depth = 0) {\n  if (!src || typeof src !== \"object\" || depth > 4) return \"\";\n  if (Array.isArray(src)) {\n    for (const x of src.slice(0, 5)) { const v = find(x, keys, depth + 1); if (v) return v; }\n    return \"\";\n  }\n  for (const key of keys) {\n    for (const [k, v] of Object.entries(src)) {\n      if (squash(k) === squash(key) && (typeof v === \"string\" || typeof v === \"number\") && String(v).trim()) return String(v).trim();\n    }\n  }\n  for (const v of Object.values(src)) { const r = find(v, keys, depth + 1); if (r) return r; }\n  return \"\";\n}\n// First array (a few levels deep) that has an element passing `test`.\nfunction firstArray(src, test, depth = 0) {\n  if (!src || typeof src !== \"object\" || depth > 4) return [];\n  if (Array.isArray(src) && src.some(test)) return src;\n  for (const v of Object.values(src)) { const r = firstArray(v, test, depth + 1); if (r.length) return r; }\n  return [];\n}\nfunction runFields(run) {\n  return { n: (run && run.normalized && run.normalized.fields) || {}, r: run && run.result };\n}\nfunction findEmail(run) {\n  const re = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}/;\n  const norm = run && run.normalized && run.normalized.fields && run.normalized.fields.email;\n  if (typeof norm === \"string\" && re.test(norm)) return norm.match(re)[0].toLowerCase();\n  const m = JSON.stringify((run && run.result) ?? \"\").match(re);\n  return m ? m[0].toLowerCase() : null;\n}\n// Maps the many verifier vocabularies onto valid / invalid / catch_all / risky / unknown.\nfunction emailStatus(run) {\n  const raw = find(runFields(run), [\"status\", \"result\", \"verdict\", \"state\", \"deliverability\", \"email_status\"]).toLowerCase();\n  if (/catch.?all|accept.?all/.test(raw)) return \"catch_all\";\n  if (/^(valid|deliverable|ok|safe|verified)$/.test(raw)) return \"valid\";\n  if (/invalid|undeliverable|bounce|bad|disposable|not.?found/.test(raw)) return \"invalid\";\n  if (/risky|unknown_risky|accept/.test(raw)) return \"risky\";\n  return \"unknown\";\n}\nfunction cleanDomain(v) {\n  const s = String(v || \"\").trim().toLowerCase().replace(/^https?:\\/\\//, \"\").replace(/^www\\./, \"\").split(/[/?#]/)[0];\n  return /^[a-z0-9.-]+\\.[a-z]{2,}$/.test(s) ? s : \"\";\n}\n\nconst form = $input.first().json;\nconst mine = cleanDomain(form[\"Your domain\"]);\nconst rivals = String(form[\"Competitor domains\"] || \"\").split(/[,\\s]+/).map(cleanDomain).filter((d) => d && d !== mine);\nconst list = [...new Set(rivals)].slice(0, 5);\nreturn [mine, ...list].filter(Boolean).map((domain) => ({ json: { domain, mine: domain === mine } }));\n"
+      },
+      "id": "8096a45a-d55b-461e-a25c-9ad35eac27f7",
+      "name": "Domains to check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "run",
+        "endpointId": "job:backlinks.referring.domains",
+        "input": "={{ JSON.stringify({ domain: $json.domain }) }}",
+        "idempotencyKey": "={{ 'n8n-refdomains:' + $json.domain + ':' + $now.toFormat('yyyy-MM-dd') }}",
+        "fallback": true,
+        "maxCostUsd": 0.05,
+        "wait": 60
+      },
+      "id": "b030cefa-a7df-4e36-a577-b5722adad5a5",
+      "name": "Referring domains",
+      "type": "n8n-nodes-looot.looot",
+      "typeVersion": 1,
+      "position": [
+        440,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Link gaps\". Sites that link to your competitors but not to you, most competitors first.\n// Shared helpers for reading a looot run item. The looot node returns the run as the item:\n// {runId, status, result, normalized: {fields}, actualCost, route: {servedBy}, error, topUpUrl}.\n// With \"On Error: Continue\", a refused call (402 empty balance, 400 bad input) arrives as {error: \"...\"}.\nfunction runCost(run) {\n  return run && typeof run.actualCost === \"number\" ? run.actualCost : 0;\n}\nfunction runProblem(run) {\n  if (!run || typeof run !== \"object\") return \"no answer\";\n  if (!run.status) {\n    const e = run.error;\n    if (typeof e === \"string\") return e;\n    if (e && typeof e === \"object\") return [e.code, e.message].filter(Boolean).join(\": \") || \"error\";\n    return \"error\";\n  }\n  if (run.status !== \"completed\") return (run.error && run.error.message) || run.status;\n  return null;\n}\nfunction squash(k) {\n  return String(k).toLowerCase().replace(/[\\s_\\-.]/g, \"\");\n}\n// First string or number under any of `keys`, searched a few levels deep.\nfunction find(src, keys, depth = 0) {\n  if (!src || typeof src !== \"object\" || depth > 4) return \"\";\n  if (Array.isArray(src)) {\n    for (const x of src.slice(0, 5)) { const v = find(x, keys, depth + 1); if (v) return v; }\n    return \"\";\n  }\n  for (const key of keys) {\n    for (const [k, v] of Object.entries(src)) {\n      if (squash(k) === squash(key) && (typeof v === \"string\" || typeof v === \"number\") && String(v).trim()) return String(v).trim();\n    }\n  }\n  for (const v of Object.values(src)) { const r = find(v, keys, depth + 1); if (r) return r; }\n  return \"\";\n}\n// First array (a few levels deep) that has an element passing `test`.\nfunction firstArray(src, test, depth = 0) {\n  if (!src || typeof src !== \"object\" || depth > 4) return [];\n  if (Array.isArray(src) && src.some(test)) return src;\n  for (const v of Object.values(src)) { const r = firstArray(v, test, depth + 1); if (r.length) return r; }\n  return [];\n}\nfunction runFields(run) {\n  return { n: (run && run.normalized && run.normalized.fields) || {}, r: run && run.result };\n}\nfunction findEmail(run) {\n  const re = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}/;\n  const norm = run && run.normalized && run.normalized.fields && run.normalized.fields.email;\n  if (typeof norm === \"string\" && re.test(norm)) return norm.match(re)[0].toLowerCase();\n  const m = JSON.stringify((run && run.result) ?? \"\").match(re);\n  return m ? m[0].toLowerCase() : null;\n}\n// Maps the many verifier vocabularies onto valid / invalid / catch_all / risky / unknown.\nfunction emailStatus(run) {\n  const raw = find(runFields(run), [\"status\", \"result\", \"verdict\", \"state\", \"deliverability\", \"email_status\"]).toLowerCase();\n  if (/catch.?all|accept.?all/.test(raw)) return \"catch_all\";\n  if (/^(valid|deliverable|ok|safe|verified)$/.test(raw)) return \"valid\";\n  if (/invalid|undeliverable|bounce|bad|disposable|not.?found/.test(raw)) return \"invalid\";\n  if (/risky|unknown_risky|accept/.test(raw)) return \"risky\";\n  return \"unknown\";\n}\nfunction cleanDomain(v) {\n  const s = String(v || \"\").trim().toLowerCase().replace(/^https?:\\/\\//, \"\").replace(/^www\\./, \"\").split(/[/?#]/)[0];\n  return /^[a-z0-9.-]+\\.[a-z]{2,}$/.test(s) ? s : \"\";\n}\n\nconst MAX_ROWS = 100;\nconst asked = $(\"Domains to check\").all().map((i) => i.json);\nconst mineLinks = new Set();\nconst gap = new Map();\nlet cost = 0;\n$input.all().forEach(({ json: run }, i) => {\n  const d = asked[i] || {};\n  cost += runCost(run);\n  if (runProblem(run)) return;\n  const refs = firstArray(run.result, (x) => x && typeof x === \"object\" && (x.domain || x.referring_domain || x.domain_from));\n  for (const r of refs) {\n    const ref = cleanDomain(r.domain || r.referring_domain || r.domain_from);\n    if (!ref) continue;\n    if (d.mine) { mineLinks.add(ref); continue; }\n    const g = gap.get(ref) || { referring_domain: ref, links_to: new Set(), rank: Number(r.rank || r.domain_rank || r.domain_authority || 0) || 0 };\n    g.links_to.add(d.domain);\n    gap.set(ref, g);\n  }\n});\nconst found = new Date().toISOString();\nconst rows = [...gap.values()]\n  .filter((g) => !mineLinks.has(g.referring_domain))\n  .sort((a, b) => b.links_to.size - a.links_to.size || b.rank - a.rank)\n  .slice(0, MAX_ROWS);\nreturn rows.map((g) => ({\n  json: {\n    referring_domain: g.referring_domain,\n    links_to_competitors: [...g.links_to].join(\", \"),\n    competitor_count: g.links_to.size,\n    rank: g.rank || \"\",\n    your_domain: (asked.find((a) => a.mine) || {}).domain || \"\",\n    found_at: found,\n    run_cost_usd: Number(cost.toFixed(6)),\n  },\n}));\n"
+      },
+      "id": "ea9f25d7-c23d-4089-a70e-d4e079a38429",
+      "name": "Link gaps",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_SPREADSHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Prospects"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "b10dc57f-7d4a-4b48-a1b3-b99b98cd1bc4",
+      "name": "Save prospects",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.6,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Referring domains for each site\nYours plus up to 5 competitors.",
+        "width": 420,
+        "height": 380,
+        "color": 7
+      },
+      "id": "85613034-561d-42d0-ab00-a4faea4bbc6d",
+      "name": "Lookup section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        160,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Link to them, not to you\nSorted by competitor count, then rank.",
+        "width": 440,
+        "height": 380,
+        "color": 7
+      },
+      "id": "1e61c402-859b-4097-a058-2b05cdc3fb4d",
+      "name": "Gap section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        600,
+        -180
+      ]
+    }
+  ],
+  "connections": {
+    "Domains form": {
+      "main": [
+        [
+          {
+            "node": "Domains to check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Domains to check": {
+      "main": [
+        [
+          {
+            "node": "Referring domains",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Referring domains": {
+      "main": [
+        [
+          {
+            "node": "Link gaps",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Link gaps": {
+      "main": [
+        [
+          {
+            "node": "Save prospects",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

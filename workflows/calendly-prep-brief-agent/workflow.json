@@ -1,0 +1,267 @@
+{
+  "name": "Post a research brief to Slack when someone books a Calendly meeting, with one AI agent and looot",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## A brief on every new Calendly booking, in Slack\n\n### How it works\n1. Someone books a meeting on your Calendly.\n2. The workflow reads who booked, the event, the time and their answers to your booking questions.\n3. One AI agent looks up the person behind the email, their LinkedIn profile, the company and recent news through looot.\n4. A short brief with who they are, what the company does, what is new and three questions to ask lands in Slack.\n\nOne looot credential replaces the Perplexity and RapidAPI accounts this flow usually needs.\n\n**Cost per booking**, from looot's public catalog on 2026-10-31: person from email from $0.0036, profile $0.0012, company data $0.0019, news $0.001. About $0.008 per booking. Each call is capped at $0.03 and the agent at 8 steps, so a booking can never cost more than $0.24. Model tokens are billed by OpenAI.\n\n### Setup\n- Needs the verified community node **n8n-nodes-looot** (built against 0.1.4): Settings > Community nodes > Install, search `looot`. [Install guide](https://docs.n8n.io/integrations/community-nodes/installation/verified-install/)\n- looot: sign up at [looot.ai](https://looot.ai), top up (from $5), create an agent token under Settings > Agent tokens, then add a **looot API** credential in n8n.\n- Calendly (OAuth2), OpenAI and Slack credentials. Set the channel ID in **Post to Slack**.\n- Self-hosted n8n: set `N8N_COMMUNITY_PACKAGES_ALLOW_TOOL_USAGE=true` so the agent can use the looot node as a tool.\n\n### Customization\nSend the brief by Gmail instead of Slack. Add your offer to the system message so the questions fit it.",
+        "width": 520,
+        "height": 640
+      },
+      "id": "69bd52b1-431c-4e87-abe3-152c950335bf",
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -620,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "scope": "user",
+        "events": [
+          "invitee.created"
+        ]
+      },
+      "id": "8cf354da-bf35-4b40-a2a7-3d2aedaf4fd5",
+      "name": "New Calendly booking",
+      "type": "n8n-nodes-base.calendlyTrigger",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "221494b5-772d-4996-ab78-cfa830626f4c"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Read the booking\". Pulls the invitee, the event and the booking answers from Calendly.\nconst FREE = /^(gmail|googlemail|yahoo|hotmail|outlook|live|icloud|me|aol|proton|protonmail|gmx|mail|yandex|zoho)\\./i;\nconst body = $input.first().json;\nconst p = body.payload || body;\nconst email = String(p.email || \"\").trim().toLowerCase();\nconst domain = email.includes(\"@\") ? email.split(\"@\")[1] : \"\";\nconst ev = p.scheduled_event || p.event || {};\nconst answers = (Array.isArray(p.questions_and_answers) ? p.questions_and_answers : [])\n  .map((q) => `${q.question}: ${q.answer}`).join(\"\\n\");\nreturn [{\n  json: {\n    email,\n    name: String(p.name || [p.first_name, p.last_name].filter(Boolean).join(\" \")).trim(),\n    domain,\n    work_email: Boolean(domain) && !FREE.test(domain),\n    event_name: ev.name || \"\",\n    start_time: ev.start_time || \"\",\n    answers,\n  },\n}];\n"
+      },
+      "id": "35ee5bb4-25e9-420a-a072-6a418e5c201e",
+      "name": "Read the booking",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Prepare me for a meeting with {{ $json.name }} <{{ $json.email }}>{{ $json.work_email ? ' from ' + $json.domain : '' }}.\nEvent: {{ $json.event_name }} at {{ $json.start_time }}.\nTheir answers:\n{{ $json.answers }}",
+        "hasOutputParser": false,
+        "options": {
+          "systemMessage": "You prepare a seller for a booked call.\n1. job:people.enrich.by-email with {\"email\": \"...\"}.\n2. If you get a LinkedIn URL: job:linkedin.person.profile with {\"linkedin_url\": \"...\"}.\n3. If the email is on a company domain: job:company.enrich with {\"domain\": \"...\"} and job:news.search with {\"query\": \"\\\"<company name>\\\"\"}.\nWrite at most 150 words in Slack markdown: who they are, what the company does, what is new, and 3 questions to ask that use their booking answers. Only use what the data says.",
+          "maxIterations": 8,
+          "returnIntermediateSteps": true
+        }
+      },
+      "id": "86707009-64fc-4b49-add1-484000309a7b",
+      "name": "Meeting prep agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4.1-mini"
+        },
+        "options": {}
+      },
+      "id": "65f40e98-586d-4b60-a80f-6ac607dc122f",
+      "name": "OpenAI chat model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        380,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Runs one looot data call and returns the run: status, result and actualCost. Every call is capped. Use only these ids and inputs:\n- job:people.enrich.by-email, input {\"email\": \"ada@example.com\"}: the person behind an email.\n- job:linkedin.person.profile, input {\"linkedin_url\": \"...\"}: the profile.\n- job:company.enrich, input {\"domain\": \"example.com\"}: company data.\n- job:news.search, input {\"query\": \"...\"}: Google News articles.",
+        "operation": "run",
+        "endpointId": "={{ $fromAI('endpointId', 'A looot job or endpoint id from the tool description', 'string') }}",
+        "input": "={{ $fromAI('input', 'The input object, with the field names the tool description gives for that id', 'json') }}",
+        "idempotencyKey": "={{ ('n8n-' + $execution.id + '-' + $fromAI('endpointId', 'A looot job or endpoint id from the tool description', 'string') + '-' + JSON.stringify($fromAI('input', 'The input object, with the field names the tool description gives for that id', 'json'))).slice(0, 200) }}",
+        "fallback": true,
+        "maxCostUsd": 0.03,
+        "wait": 60
+      },
+      "id": "9df279d4-e430-4f3a-a2be-f484ce580d49",
+      "name": "looot",
+      "type": "n8n-nodes-looot.loootTool",
+      "typeVersion": 1,
+      "position": [
+        520,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Slack message\". The brief, who booked, when, and what the data cost.\n// Shared helper: adds up what the agent's looot calls cost, from the agent's intermediate steps\n// (the agent's \"Return Intermediate Steps\" option is on). Each looot tool answer carries actualCost.\nfunction agentCost(item) {\n  const steps = (item && Array.isArray(item.intermediateSteps)) ? item.intermediateSteps : [];\n  let usd = 0;\n  let calls = 0;\n  for (const step of steps) {\n    const tool = String((step && step.action && step.action.tool) || \"\");\n    if (!/looot/i.test(tool)) continue;\n    calls += 1;\n    const text = typeof step.observation === \"string\" ? step.observation : JSON.stringify(step.observation ?? \"\");\n    for (const m of text.matchAll(/\"actualCost\"\\s*:\\s*([0-9.eE+-]+)/g)) {\n      const n = Number(m[1]);\n      if (Number.isFinite(n)) usd += n;\n    }\n  }\n  return { looot_calls: calls, looot_cost_usd: Number(usd.toFixed(6)) };\n}\n\nconst item = $input.first().json;\nconst b = $(\"Read the booking\").first().json;\nconst cost = agentCost(item);\nconst brief = typeof item.output === \"string\" ? item.output : JSON.stringify(item.output ?? \"\");\nconst when = b.start_time ? new Date(b.start_time).toUTCString().replace(\":00 GMT\", \" UTC\") : \"time not given\";\nreturn [{\n  json: {\n    text: `*New booking:* ${b.name || b.email} (${b.email}), ${b.event_name || \"meeting\"}, ${when}\\n\\n${brief}\\n\\n_${cost.looot_calls} looot calls, $${cost.looot_cost_usd.toFixed(4)}_`,\n    ...cost,\n  },\n}];\n"
+      },
+      "id": "dd3a51b8-6802-4299-a5ed-b77103a21eb6",
+      "name": "Slack message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_CHANNEL_ID"
+        },
+        "text": "={{ $json.text }}",
+        "otherOptions": {
+          "mrkdwn": true
+        }
+      },
+      "id": "b3fea259-d005-44a7-a390-af6070ea556e",
+      "name": "Post to Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        920,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Who booked\nName, email, event, time and booking answers.",
+        "width": 460,
+        "height": 380,
+        "color": 7
+      },
+      "id": "23e33478-f593-4386-acec-c3ca01c411ac",
+      "name": "Booking section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Research the booking\nFour looot jobs behind one tool.",
+        "width": 300,
+        "height": 600,
+        "color": 7
+      },
+      "id": "ee27c67f-fec0-4b5b-ae1d-9020593815cd",
+      "name": "Agent section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        380,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Brief in Slack\nWith the data cost of the brief.",
+        "width": 420,
+        "height": 380,
+        "color": 7
+      },
+      "id": "f1a15828-fe40-4ef1-a53c-8584edb0a75b",
+      "name": "Slack section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        680,
+        -180
+      ]
+    }
+  ],
+  "connections": {
+    "New Calendly booking": {
+      "main": [
+        [
+          {
+            "node": "Read the booking",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read the booking": {
+      "main": [
+        [
+          {
+            "node": "Meeting prep agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Meeting prep agent": {
+      "main": [
+        [
+          {
+            "node": "Slack message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack message": {
+      "main": [
+        [
+          {
+            "node": "Post to Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI chat model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Meeting prep agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "looot": {
+      "ai_tool": [
+        [
+          {
+            "node": "Meeting prep agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

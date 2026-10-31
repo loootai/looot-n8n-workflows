@@ -16,7 +16,7 @@ const NODE_DIR = {
   "n8n-nodes-base.manualTrigger": "ManualTrigger", "n8n-nodes-base.noOp": "NoOp", "n8n-nodes-base.formTrigger": "Form",
   "n8n-nodes-base.executeWorkflowTrigger": "ExecuteWorkflow/ExecuteWorkflowTrigger", "n8n-nodes-base.googleSheets": "Google/Sheet",
   "n8n-nodes-base.googleCalendar": "Google/Calendar", "n8n-nodes-base.gmail": "Google/Gmail", "n8n-nodes-base.hubspot": "Hubspot",
-  "n8n-nodes-base.notion": "Notion", "n8n-nodes-base.slack": "Slack", "n8n-nodes-base.httpRequest": "HttpRequest",
+  "n8n-nodes-base.notion": "Notion", "n8n-nodes-base.slack": "Slack", "n8n-nodes-base.typeformTrigger": "Typeform", "n8n-nodes-base.calendlyTrigger": "Calendly", "n8n-nodes-base.httpRequest": "HttpRequest",
   "n8n-nodes-base.webhook": "Webhook", "n8n-nodes-base.respondToWebhook": "RespondToWebhook",
   "@n8n/n8n-nodes-langchain.agent": "agents/Agent", "@n8n/n8n-nodes-langchain.chatTrigger": "trigger/ChatTrigger",
   "@n8n/n8n-nodes-langchain.lmChatOpenAi": "llms/LMChatOpenAi", "@n8n/n8n-nodes-langchain.memoryBufferWindow": "memory/MemoryBufferWindow",

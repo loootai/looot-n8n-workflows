@@ -1,0 +1,237 @@
+{
+  "name": "Email yourself a sourced research report on any topic with one AI agent and looot",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## A sourced research report in your inbox\n\n### How it works\n1. You fill in a form with a topic and the address that should get the report.\n2. One AI agent plans a few searches, runs them on Google, the web and Google News through looot, reads the best pages and writes a report with links to its sources.\n3. The report arrives by Gmail with how many data calls it took and what they cost.\n\nOne looot credential replaces the SerpAPI, Google Custom Search and NewsAPI keys this flow usually needs.\n\n**Cost per report**, from looot's public catalog on 2026-10-31: Google results $0.0009 to $0.001 per search, news $0.001, a page read from $0.0002. A report with 5 searches and 8 page reads costs about $0.007 in data. Each call is capped at $0.03 and the agent at 20 steps, so a report can never cost more than $0.60. Model tokens are billed by OpenAI.\n\n### Setup\n- Needs the verified community node **n8n-nodes-looot** (built against 0.1.4): Settings > Community nodes > Install, search `looot`. [Install guide](https://docs.n8n.io/integrations/community-nodes/installation/verified-install/)\n- looot: sign up at [looot.ai](https://looot.ai), top up (from $5), create an agent token under Settings > Agent tokens, then add a **looot API** credential in n8n.\n- OpenAI and Gmail credentials.\n- Self-hosted n8n: set `N8N_COMMUNITY_PACKAGES_ALLOW_TOOL_USAGE=true` so the agent can use the looot node as a tool.\n\n### Customization\nChange the report format in the agent's system message. Swap the form for a weekly schedule with a fixed topic to get a standing brief.",
+        "width": 520,
+        "height": 620
+      },
+      "id": "e4244e02-f553-4c12-a26d-c800c397248c",
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -620,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "formTitle": "Research a topic",
+        "formDescription": "Searches Google, the web and news, reads the best pages and emails you a report.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Topic",
+              "placeholder": "How mid-market companies buy sales tools in 2026",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Send the report to",
+              "fieldType": "email",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "2450fac3-de8c-4061-a474-d1f2db525ad6",
+      "name": "Report form",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "1c1d99b5-54ee-453a-a15b-2722984a4bc3"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Research this topic and write a report: {{ $json['Topic'] }}",
+        "hasOutputParser": false,
+        "options": {
+          "systemMessage": "You are a careful research assistant.\n1. Plan 3 to 6 search queries that cover the topic from different sides.\n2. Run them with the looot tool: job:google.serp.organic for Google, job:news.search for recent news, job:web.search when Google is thin.\n3. Read the 5 to 8 most useful pages with job:web.scrape.markdown.\n4. Write markdown: a 3 line summary, sections with findings, then a Sources list with every URL as [title](url).\nOnly state what the pages say. Say when sources disagree.",
+          "maxIterations": 20,
+          "returnIntermediateSteps": true
+        }
+      },
+      "id": "b004591d-3a83-4955-aea1-ec004f5722b9",
+      "name": "Research agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4.1-mini"
+        },
+        "options": {}
+      },
+      "id": "973d094f-b9c2-4ce1-a721-5dbda78b67aa",
+      "name": "OpenAI chat model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Runs one looot data call and returns the run: status, result and actualCost. Every call is capped. Use only these ids and inputs:\n- job:google.serp.organic, input {\"query\": \"...\", \"location\": \"United States\"}: Google organic results.\n- job:news.search, input {\"query\": \"...\"}: Google News articles.\n- job:web.search, input {\"query\": \"...\", \"limit\": 10}: web search results.\n- job:web.scrape.markdown, input {\"url\": \"https://...\"}: one page as text.",
+        "operation": "run",
+        "endpointId": "={{ $fromAI('endpointId', 'A looot job or endpoint id from the tool description', 'string') }}",
+        "input": "={{ $fromAI('input', 'The input object, with the field names the tool description gives for that id', 'json') }}",
+        "idempotencyKey": "={{ ('n8n-' + $execution.id + '-' + $fromAI('endpointId', 'A looot job or endpoint id from the tool description', 'string') + '-' + JSON.stringify($fromAI('input', 'The input object, with the field names the tool description gives for that id', 'json'))).slice(0, 200) }}",
+        "fallback": true,
+        "maxCostUsd": 0.03,
+        "wait": 60
+      },
+      "id": "13fbaae9-25db-49f1-af7d-1e6a5404b980",
+      "name": "looot",
+      "type": "n8n-nodes-looot.loootTool",
+      "typeVersion": 1,
+      "position": [
+        360,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Build the email\". Turns the agent's markdown report into simple HTML with a cost line.\n// Shared helper: adds up what the agent's looot calls cost, from the agent's intermediate steps\n// (the agent's \"Return Intermediate Steps\" option is on). Each looot tool answer carries actualCost.\nfunction agentCost(item) {\n  const steps = (item && Array.isArray(item.intermediateSteps)) ? item.intermediateSteps : [];\n  let usd = 0;\n  let calls = 0;\n  for (const step of steps) {\n    const tool = String((step && step.action && step.action.tool) || \"\");\n    if (!/looot/i.test(tool)) continue;\n    calls += 1;\n    const text = typeof step.observation === \"string\" ? step.observation : JSON.stringify(step.observation ?? \"\");\n    for (const m of text.matchAll(/\"actualCost\"\\s*:\\s*([0-9.eE+-]+)/g)) {\n      const n = Number(m[1]);\n      if (Number.isFinite(n)) usd += n;\n    }\n  }\n  return { looot_calls: calls, looot_cost_usd: Number(usd.toFixed(6)) };\n}\n\nconst item = $input.first().json;\nconst form = $(\"Report form\").first().json;\nconst cost = agentCost(item);\nconst md = typeof item.output === \"string\" ? item.output : JSON.stringify(item.output ?? \"\");\nconst esc = (s) => String(s).replace(/&/g, \"&amp;\").replace(/</g, \"&lt;\").replace(/>/g, \"&gt;\");\nconst inline = (s) => esc(s)\n  .replace(/\\*\\*([^*]+)\\*\\*/g, \"<b>$1</b>\")\n  .replace(/\\[([^\\]]+)\\]\\((https?:\\/\\/[^\\s)]+)\\)/g, '<a href=\"$2\">$1</a>');\nconst html = md.split(\"\\n\").map((line) => {\n  const h = line.match(/^(#{1,4})\\s+(.*)$/);\n  if (h) return `<h${h[1].length + 1}>${inline(h[2])}</h${h[1].length + 1}>`;\n  if (/^\\s*[-*]\\s+/.test(line)) return `<li>${inline(line.replace(/^\\s*[-*]\\s+/, \"\"))}</li>`;\n  return line.trim() ? `<p>${inline(line)}</p>` : \"\";\n}).join(\"\\n\");\nconst topic = String(form[\"Topic\"] || \"your topic\").slice(0, 80);\nreturn [{\n  json: {\n    to: String(form[\"Send the report to\"] || \"\").trim(),\n    subject: `Research report: ${topic}`,\n    html: `${html}\\n<hr><p style=\"color:#666\">${cost.looot_calls} looot calls, data cost $${cost.looot_cost_usd.toFixed(4)}. Model tokens are billed by your model provider.</p>`,\n    ...cost,\n  },\n}];\n"
+      },
+      "id": "d9756be1-d789-4d40-a2ba-1722c152b718",
+      "name": "Build the email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "message": "={{ $json.html }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "db37f6d6-4378-4554-a091-f6e791b6eca7",
+      "name": "Send the report",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        740,
+        0
+      ],
+      "webhookId": "95e0ad10-79bf-4926-a5cc-d5834a27e56b"
+    },
+    {
+      "parameters": {
+        "content": "## Search, read, write\nThe agent's only data tool is looot. Every call is capped at $0.03.",
+        "width": 300,
+        "height": 600,
+        "color": 7
+      },
+      "id": "51311cf8-1895-454b-a7c6-29a6713f3cde",
+      "name": "Agent section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        200,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Email the report\nMarkdown to HTML, a cost line, then Gmail.",
+        "width": 400,
+        "height": 380,
+        "color": 7
+      },
+      "id": "ea26f3ac-5528-418b-aa60-4046ffd275f9",
+      "name": "Send section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        500,
+        -180
+      ]
+    }
+  ],
+  "connections": {
+    "Report form": {
+      "main": [
+        [
+          {
+            "node": "Research agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Research agent": {
+      "main": [
+        [
+          {
+            "node": "Build the email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build the email": {
+      "main": [
+        [
+          {
+            "node": "Send the report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI chat model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Research agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "looot": {
+      "ai_tool": [
+        [
+          {
+            "node": "Research agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

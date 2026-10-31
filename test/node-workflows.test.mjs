@@ -12,8 +12,8 @@ const STICKY = "n8n-nodes-base.stickyNote";
 const words = (s) => s.replace(/[#*`\[\]()]/g, " ").split(/\s+/).filter(Boolean).length;
 const DEFAULT_NAMES = new Set(["Code", "HTTP Request", "Set", "If", "Edit Fields", "AI Agent", "Google Sheets", "Slack", "HubSpot", "looot1"]);
 
-test("thirteen looot-node workflows, each with a README", () => {
-  assert.equal(names.length, 13);
+test("thirty-three looot-node workflows, each with a README", () => {
+  assert.equal(names.length, 33);
   for (const n of names) assert.ok(existsSync(`${root}workflows/${n}/README.md`), `${n}/README.md missing`);
 });
 
@@ -86,7 +86,7 @@ for (const name of names) {
       assert.equal(p.fallback, true);
       assert.ok(p.wait > 0);
       if (n.type === LOOOT_NODE) {
-        assert.match(p.endpointId, /^job:[a-z.]+$/);
+        assert.match(p.endpointId, /^job:[a-z.-]+$/);
         assert.equal(n.onError, "continueRegularOutput", `${n.name}: a refused call should not stop the batch`);
       }
     }

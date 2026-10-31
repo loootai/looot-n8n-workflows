@@ -1,0 +1,224 @@
+{
+  "name": "Fill in job title, company and location on new HubSpot contacts with looot person enrichment",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Job title, company and location on new HubSpot contacts\n\n### How it works\n1. Every hour, reads contacts recently created or updated in HubSpot.\n2. Keeps work emails with an empty job title that were not tried before, at most 25 per run.\n3. looot looks up the person behind each email, falling back to the next provider when one misses.\n4. The contact gets job title, company, city and country. Contacts with no match are left alone.\n\nNo AI step. One looot credential replaces the Apollo and RapidAPI LinkedIn accounts this flow usually needs.\n\nContacts already tried are remembered in the workflow's static data, which n8n keeps only for active workflows.\n\n**Cost per contact**, from looot's public catalog on 2026-10-31: person from email from $0.0036. Each call is capped at $0.05, so a run can never spend more than $1.25. A failed call costs $0.\n\n### Setup\n- Needs the verified community node **n8n-nodes-looot** (built against 0.1.4): Settings > Community nodes > Install, search `looot`. [Install guide](https://docs.n8n.io/integrations/community-nodes/installation/verified-install/)\n- looot: sign up at [looot.ai](https://looot.ai), top up (from $5), create an agent token under Settings > Agent tokens, then add a **looot API** credential in n8n.\n- A HubSpot private app token credential with contacts read and write access, set in both HubSpot nodes.\n\n### Customization\nChange MAX in **Contacts to enrich**. Map more fields in **Update contact**, for example the LinkedIn URL into a custom property.",
+        "width": 520,
+        "height": 640
+      },
+      "id": "87d2072f-8266-4873-ae1b-8e2f1e8f36c8",
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -620,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours"
+            }
+          ]
+        }
+      },
+      "id": "0659447f-702f-47ae-a61c-e708a8360ffe",
+      "name": "Every hour",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "appToken",
+        "resource": "contact",
+        "operation": "getRecentlyCreatedUpdated",
+        "returnAll": false,
+        "limit": 100,
+        "additionalFields": {}
+      },
+      "id": "c79560f3-0e9d-4b77-a26e-3b1e844b934d",
+      "name": "Recent contacts",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2.1,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Contacts to enrich\". Work emails with no job title yet, at most MAX per run. Contacts\n// already tried are remembered in the workflow's static data (active workflows only).\nconst MAX = 25;\nconst FREE = /^(gmail|googlemail|yahoo|hotmail|outlook|live|icloud|me|aol|proton|protonmail|gmx|mail|yandex|zoho)\\./i;\nconst store = typeof $getWorkflowStaticData === \"function\" ? $getWorkflowStaticData(\"global\") : {};\nconst done = new Set(Array.isArray(store.tried) ? store.tried : []);\nconst val = (c, k) => {\n  const p = (c.properties || {})[k];\n  return String((p && typeof p === \"object\" ? p.value : p) || c[k] || \"\").trim();\n};\nconst out = [];\nfor (const { json: c } of $input.all()) {\n  const email = val(c, \"email\").toLowerCase();\n  const domain = email.split(\"@\")[1] || \"\";\n  if (!email.includes(\"@\") || FREE.test(domain) || val(c, \"jobtitle\") || done.has(email)) continue;\n  done.add(email);\n  out.push({ json: { email, contact_id: String(c.vid || c.id || \"\") } });\n  if (out.length >= MAX) break;\n}\nstore.tried = [...done].slice(-5000);\nreturn out;\n"
+      },
+      "id": "7e4b097d-c018-4bf1-ab0e-2d1ce3fbe692",
+      "name": "Contacts to enrich",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "run",
+        "endpointId": "job:people.enrich.by-email",
+        "input": "={{ JSON.stringify({ email: $json.email }) }}",
+        "idempotencyKey": "={{ 'n8n-person-by-email:' + $json.email }}",
+        "fallback": true,
+        "maxCostUsd": 0.05,
+        "wait": 60
+      },
+      "id": "862ebf83-8c95-4a32-a2e6-9e02f93bd630",
+      "name": "Look up the person",
+      "type": "n8n-nodes-looot.looot",
+      "typeVersion": 1,
+      "position": [
+        660,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Contact fields\". Maps the looot person answer onto HubSpot contact fields.\n// Shared helpers for reading a looot run item. The looot node returns the run as the item:\n// {runId, status, result, normalized: {fields}, actualCost, route: {servedBy}, error, topUpUrl}.\n// With \"On Error: Continue\", a refused call (402 empty balance, 400 bad input) arrives as {error: \"...\"}.\nfunction runCost(run) {\n  return run && typeof run.actualCost === \"number\" ? run.actualCost : 0;\n}\nfunction runProblem(run) {\n  if (!run || typeof run !== \"object\") return \"no answer\";\n  if (!run.status) {\n    const e = run.error;\n    if (typeof e === \"string\") return e;\n    if (e && typeof e === \"object\") return [e.code, e.message].filter(Boolean).join(\": \") || \"error\";\n    return \"error\";\n  }\n  if (run.status !== \"completed\") return (run.error && run.error.message) || run.status;\n  return null;\n}\nfunction squash(k) {\n  return String(k).toLowerCase().replace(/[\\s_\\-.]/g, \"\");\n}\n// First string or number under any of `keys`, searched a few levels deep.\nfunction find(src, keys, depth = 0) {\n  if (!src || typeof src !== \"object\" || depth > 4) return \"\";\n  if (Array.isArray(src)) {\n    for (const x of src.slice(0, 5)) { const v = find(x, keys, depth + 1); if (v) return v; }\n    return \"\";\n  }\n  for (const key of keys) {\n    for (const [k, v] of Object.entries(src)) {\n      if (squash(k) === squash(key) && (typeof v === \"string\" || typeof v === \"number\") && String(v).trim()) return String(v).trim();\n    }\n  }\n  for (const v of Object.values(src)) { const r = find(v, keys, depth + 1); if (r) return r; }\n  return \"\";\n}\n// First array (a few levels deep) that has an element passing `test`.\nfunction firstArray(src, test, depth = 0) {\n  if (!src || typeof src !== \"object\" || depth > 4) return [];\n  if (Array.isArray(src) && src.some(test)) return src;\n  for (const v of Object.values(src)) { const r = firstArray(v, test, depth + 1); if (r.length) return r; }\n  return [];\n}\nfunction runFields(run) {\n  return { n: (run && run.normalized && run.normalized.fields) || {}, r: run && run.result };\n}\nfunction findEmail(run) {\n  const re = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}/;\n  const norm = run && run.normalized && run.normalized.fields && run.normalized.fields.email;\n  if (typeof norm === \"string\" && re.test(norm)) return norm.match(re)[0].toLowerCase();\n  const m = JSON.stringify((run && run.result) ?? \"\").match(re);\n  return m ? m[0].toLowerCase() : null;\n}\n// Maps the many verifier vocabularies onto valid / invalid / catch_all / risky / unknown.\nfunction emailStatus(run) {\n  const raw = find(runFields(run), [\"status\", \"result\", \"verdict\", \"state\", \"deliverability\", \"email_status\"]).toLowerCase();\n  if (/catch.?all|accept.?all/.test(raw)) return \"catch_all\";\n  if (/^(valid|deliverable|ok|safe|verified)$/.test(raw)) return \"valid\";\n  if (/invalid|undeliverable|bounce|bad|disposable|not.?found/.test(raw)) return \"invalid\";\n  if (/risky|unknown_risky|accept/.test(raw)) return \"risky\";\n  return \"unknown\";\n}\nfunction cleanDomain(v) {\n  const s = String(v || \"\").trim().toLowerCase().replace(/^https?:\\/\\//, \"\").replace(/^www\\./, \"\").split(/[/?#]/)[0];\n  return /^[a-z0-9.-]+\\.[a-z]{2,}$/.test(s) ? s : \"\";\n}\n\nconst picked = $(\"Contacts to enrich\").all().map((i) => i.json);\nconst out = [];\n$input.all().forEach(({ json: run }, i) => {\n  const c = picked[i] || {};\n  if (runProblem(run)) return;\n  const src = runFields(run);\n  const title = find(src, [\"job_title\", \"jobTitle\", \"title\", \"headline\", \"position\"]);\n  const company = find(src, [\"company_name\", \"companyName\", \"organization\", \"company\"]);\n  if (!title && !company) return;\n  out.push({\n    json: {\n      email: c.email,\n      first_name: find(src, [\"first_name\", \"firstName\", \"given_name\"]),\n      last_name: find(src, [\"last_name\", \"lastName\", \"family_name\"]),\n      job_title: title.slice(0, 200),\n      company: company.slice(0, 200),\n      city: find(src, [\"city\", \"locality\"]),\n      country: find(src, [\"country\", \"country_name\", \"countryCode\"]),\n      looot_cost_usd: runCost(run),\n    },\n  });\n});\nreturn out;\n"
+      },
+      "id": "8c7d9766-b732-4970-a194-ef88e15f6108",
+      "name": "Contact fields",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "appToken",
+        "resource": "contact",
+        "operation": "upsert",
+        "email": "={{ $json.email }}",
+        "additionalFields": {
+          "firstName": "={{ $json.first_name }}",
+          "lastName": "={{ $json.last_name }}",
+          "jobTitle": "={{ $json.job_title }}",
+          "companyName": "={{ $json.company }}",
+          "city": "={{ $json.city }}",
+          "country": "={{ $json.country }}"
+        },
+        "options": {}
+      },
+      "id": "2a5c2d28-b94c-46da-a5d8-1f3cf8080585",
+      "name": "Update contact",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2.1,
+      "position": [
+        1100,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## New contacts only\nWork email, no job title, not tried before.",
+        "width": 420,
+        "height": 380,
+        "color": 7
+      },
+      "id": "33ec8056-68cc-4df3-a008-f307a9650ba0",
+      "name": "Pick section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        160,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Look up and write\nOne looot call per contact, then one HubSpot upsert.",
+        "width": 660,
+        "height": 380,
+        "color": 7
+      },
+      "id": "e230c8a6-4230-4f69-ae31-7e095ba54e68",
+      "name": "Lookup section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        600,
+        -180
+      ]
+    }
+  ],
+  "connections": {
+    "Every hour": {
+      "main": [
+        [
+          {
+            "node": "Recent contacts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recent contacts": {
+      "main": [
+        [
+          {
+            "node": "Contacts to enrich",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Contacts to enrich": {
+      "main": [
+        [
+          {
+            "node": "Look up the person",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Look up the person": {
+      "main": [
+        [
+          {
+            "node": "Contact fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Contact fields": {
+      "main": [
+        [
+          {
+            "node": "Update contact",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

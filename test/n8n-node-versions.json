@@ -120,6 +120,14 @@
       2.6,
       2.7
     ],
+    "n8n-nodes-base.typeformTrigger": [
+      1,
+      1.1
+    ],
+    "n8n-nodes-base.calendlyTrigger": [
+      1,
+      2
+    ],
     "@n8n/n8n-nodes-langchain.agent": [
       1,
       1.1,

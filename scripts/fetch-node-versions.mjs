@@ -24,6 +24,8 @@ const FILES = {
   "n8n-nodes-base.hubspot": BASE + "Hubspot/Hubspot.node.ts",
   "n8n-nodes-base.notion": BASE + "Notion/Notion.node.ts",
   "n8n-nodes-base.slack": BASE + "Slack/Slack.node.ts",
+  "n8n-nodes-base.typeformTrigger": BASE + "Typeform/TypeformTrigger.node.ts",
+  "n8n-nodes-base.calendlyTrigger": BASE + "Calendly/CalendlyTrigger.node.ts",
   "@n8n/n8n-nodes-langchain.agent": LC + "agents/Agent/Agent.node.ts",
   "@n8n/n8n-nodes-langchain.chatTrigger": LC + "trigger/ChatTrigger/ChatTrigger.node.ts",
   "@n8n/n8n-nodes-langchain.lmChatOpenAi": LC + "llms/LMChatOpenAi/LmChatOpenAi.node.ts",

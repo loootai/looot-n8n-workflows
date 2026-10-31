@@ -1,0 +1,293 @@
+{
+  "name": "Find B2B leads, verify their emails and add them to an Instantly campaign with one AI agent and looot",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## B2B leads with verified emails and a first line, straight into Instantly\n\n### How it works\n1. You fill in a form: job title, location, an industry keyword, how many leads and one line on what you sell.\n2. One AI agent searches people through looot, reads each LinkedIn profile and company homepage, finds the work email and verifies it.\n3. It writes a one sentence first line per lead from what it read.\n4. Only leads with a valid address go to your Instantly campaign, with the first line in the personalization field.\n\nOne looot credential replaces the Apify, Emailable, Jina and Perplexity accounts this flow usually needs.\n\n**Cost per lead**, from looot's public catalog on 2026-10-31: people search from $0.00036 per result, profile $0.0012, page read from $0.0002, email find from $0.0036, verify $0.00145. About $0.007 per lead. Each call is capped at $0.03 and the agent at 70 steps, so a run can never spend more than $2.10. Model tokens are billed by OpenAI.\n\n### Setup\n- Needs the verified community node **n8n-nodes-looot** (built against 0.1.4): Settings > Community nodes > Install, search `looot`. [Install guide](https://docs.n8n.io/integrations/community-nodes/installation/verified-install/)\n- looot: sign up at [looot.ai](https://looot.ai), top up (from $5), create an agent token under Settings > Agent tokens, then add a **looot API** credential in n8n.\n- An OpenAI credential.\n- An Instantly API key with leads:create as a **Bearer Auth** credential, and your campaign ID in **Add to Instantly**.\n- Self-hosted n8n: set `N8N_COMMUNITY_PACKAGES_ALLOW_TOOL_USAGE=true` so the agent can use the looot node as a tool.\n\n### Customization\nChange the first line rule in the agent's system message. Add a Google Sheets node after **Valid leads only** to keep a copy.",
+        "width": 520,
+        "height": 720
+      },
+      "id": "1b1a89bc-086b-4f19-a523-52a7029c60dd",
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -620,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "formTitle": "Find leads for a campaign",
+        "formDescription": "Searches people, verifies emails and writes a first line. Data is billed to your looot balance.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Job title",
+              "placeholder": "Head of Sales",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Location",
+              "placeholder": "United States",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Industry keyword",
+              "placeholder": "SaaS"
+            },
+            {
+              "fieldLabel": "How many leads",
+              "fieldType": "number",
+              "placeholder": "10",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "What you sell, in one line",
+              "placeholder": "Call recording for sales teams",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "18963a2f-a176-47b3-a3d0-1f6b8137b69a",
+      "name": "Lead search form",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "77c1f91f-908c-46be-af58-b24d30bce603"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Find {{ Math.min(Number($json['How many leads']) || 10, 15) }} people with the job title \"{{ $json['Job title'] }}\" in {{ $json['Location'] }}{{ $json['Industry keyword'] ? ' at ' + $json['Industry keyword'] + ' companies' : '' }}.\nWe sell: {{ $json['What you sell, in one line'] }}",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You build cold email lists.\n1. job:people.search with {\"job_title\": \"...\", \"location\": \"...\", \"limit\": <count>} (add \"company\" for the keyword).\n2. For each person: job:linkedin.person.profile with {\"linkedin_url\": \"...\"}, then job:web.scrape.markdown on their company homepage.\n3. job:people.email.find with {\"first_name\", \"last_name\", \"domain\"}, then job:people.email.verify with {\"email\": \"...\"}. email_status is the verifier's word: valid, invalid, catch_all, risky or unknown.\n4. first_line: one sentence under 25 words that links something real from the profile or homepage to what we sell. No flattery, no invented facts.\nSkip people whose email you cannot find.",
+          "maxIterations": 70,
+          "returnIntermediateSteps": true
+        }
+      },
+      "id": "74482d1c-842a-4ff2-a794-e8634603f680",
+      "name": "Outreach research agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4.1-mini"
+        },
+        "options": {}
+      },
+      "id": "34ee2137-9391-4407-a6ef-03e62c83b965",
+      "name": "OpenAI chat model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        180,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Runs one looot data call and returns the run: status, result and actualCost. Every call is capped. Use only these ids and inputs:\n- job:people.search, input {\"job_title\": \"...\", \"location\": \"...\", \"company\": \"...\", \"limit\": 10}: people with LinkedIn URLs.\n- job:linkedin.person.profile, input {\"linkedin_url\": \"...\"}: the profile.\n- job:web.scrape.markdown, input {\"url\": \"https://...\"}: one page as text.\n- job:people.email.find, input {\"first_name\": \"...\", \"last_name\": \"...\", \"domain\": \"example.com\"}: work email.\n- job:people.email.verify, input {\"email\": \"...\"}: deliverability.",
+        "operation": "run",
+        "endpointId": "={{ $fromAI('endpointId', 'A looot job or endpoint id from the tool description', 'string') }}",
+        "input": "={{ $fromAI('input', 'The input object, with the field names the tool description gives for that id', 'json') }}",
+        "idempotencyKey": "={{ ('n8n-' + $execution.id + '-' + $fromAI('endpointId', 'A looot job or endpoint id from the tool description', 'string') + '-' + JSON.stringify($fromAI('input', 'The input object, with the field names the tool description gives for that id', 'json'))).slice(0, 200) }}",
+        "fallback": true,
+        "maxCostUsd": 0.03,
+        "wait": 60
+      },
+      "id": "cea146b4-6ab2-4aaa-a3ad-e798f5bfef60",
+      "name": "looot",
+      "type": "n8n-nodes-looot.loootTool",
+      "typeVersion": 1,
+      "position": [
+        360,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n  \"leads\": [\n    {\n      \"first_name\": \"Ada\",\n      \"last_name\": \"Lovelace\",\n      \"title\": \"Head of Sales\",\n      \"company\": \"Example Inc\",\n      \"company_domain\": \"example.com\",\n      \"linkedin_url\": \"https://www.linkedin.com/in/example\",\n      \"email\": \"ada@example.com\",\n      \"email_status\": \"valid\",\n      \"first_line\": \"One sentence.\"\n    }\n  ]\n}"
+      },
+      "id": "1f4b7632-5175-4707-a102-388cd8812b76",
+      "name": "Leads format",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.2,
+      "position": [
+        540,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Valid leads only\". One item per lead with a verified address, ready for Instantly.\n// Shared helper: adds up what the agent's looot calls cost, from the agent's intermediate steps\n// (the agent's \"Return Intermediate Steps\" option is on). Each looot tool answer carries actualCost.\nfunction agentCost(item) {\n  const steps = (item && Array.isArray(item.intermediateSteps)) ? item.intermediateSteps : [];\n  let usd = 0;\n  let calls = 0;\n  for (const step of steps) {\n    const tool = String((step && step.action && step.action.tool) || \"\");\n    if (!/looot/i.test(tool)) continue;\n    calls += 1;\n    const text = typeof step.observation === \"string\" ? step.observation : JSON.stringify(step.observation ?? \"\");\n    for (const m of text.matchAll(/\"actualCost\"\\s*:\\s*([0-9.eE+-]+)/g)) {\n      const n = Number(m[1]);\n      if (Number.isFinite(n)) usd += n;\n    }\n  }\n  return { looot_calls: calls, looot_cost_usd: Number(usd.toFixed(6)) };\n}\n\nconst item = $input.first().json;\nconst leads = (item.output && Array.isArray(item.output.leads)) ? item.output.leads : [];\nconst cost = agentCost(item);\nconst re = /^[^\\s@]+@[^\\s@]+\\.[a-z]{2,}$/i;\nreturn leads\n  .filter((l) => l && re.test(String(l.email || \"\").trim()) && String(l.email_status || \"\").toLowerCase() === \"valid\")\n  .map((l) => ({\n    json: {\n      email: String(l.email).trim().toLowerCase(),\n      first_name: l.first_name || \"\",\n      last_name: l.last_name || \"\",\n      company_name: l.company || \"\",\n      title: l.title || \"\",\n      linkedin_url: l.linkedin_url || \"\",\n      first_line: String(l.first_line || \"\").slice(0, 300),\n      run_cost_usd: cost.looot_cost_usd,\n    },\n  }));\n"
+      },
+      "id": "4afe59da-3ebd-47cf-a331-46968595deb9",
+      "name": "Valid leads only",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.instantly.ai/api/v2/leads",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ campaign: 'YOUR_CAMPAIGN_ID', email: $json.email, first_name: $json.first_name, last_name: $json.last_name, company_name: $json.company_name, personalization: $json.first_line }) }}",
+        "options": {}
+      },
+      "id": "4e891c1d-7e64-4eb4-a57b-48f361c68134",
+      "name": "Add to Instantly",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Who to reach\nTitle, place, keyword, count and your offer.",
+        "width": 240,
+        "height": 380,
+        "color": 7
+      },
+      "id": "54f1b95a-a1fc-4c57-ab3b-3fee96078da3",
+      "name": "Form section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Search, read, verify, write\nFive looot jobs behind one tool, each call capped at $0.03.",
+        "width": 440,
+        "height": 600,
+        "color": 7
+      },
+      "id": "87be43b9-1a9d-4126-ad61-e33d352b68fb",
+      "name": "Agent section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        200,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Set your campaign\nReplace YOUR_CAMPAIGN_ID in **Add to Instantly** before the first run.",
+        "width": 240,
+        "height": 380,
+        "color": 3
+      },
+      "id": "55f474b9-d8ae-412e-a374-2631115a8bd5",
+      "name": "Set campaign",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        820,
+        -180
+      ]
+    }
+  ],
+  "connections": {
+    "Lead search form": {
+      "main": [
+        [
+          {
+            "node": "Outreach research agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Outreach research agent": {
+      "main": [
+        [
+          {
+            "node": "Valid leads only",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid leads only": {
+      "main": [
+        [
+          {
+            "node": "Add to Instantly",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI chat model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Outreach research agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "looot": {
+      "ai_tool": [
+        [
+          {
+            "node": "Outreach research agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leads format": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Outreach research agent",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

@@ -1,0 +1,416 @@
+{
+  "name": "Score new trial signups against your ICP with one AI agent and looot and alert Slack on hot leads",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Score every new trial signup and post the hot ones to Slack\n\n### How it works\n1. Your app posts each new signup to the webhook: `{\"email\": \"...\", \"name\": \"...\"}`.\n2. Free mail addresses stop at **Free mail, skipped** and cost nothing.\n3. For work emails, one AI agent looks up the person and the company through looot and reads the company homepage, then scores the fit from 0 to 100 against your ICP.\n4. Hot signups (70 or more) go to Slack with title, company, size and the reason. Edit the ICP line in the system message.\n\nOne looot credential replaces the Firecrawl and Scrapin.io accounts this flow usually needs.\n\n**Cost per signup**, from looot's public catalog on 2026-10-31: person from email from $0.0036, company data $0.0019, page read from $0.0002. About $0.006 per work email signup. Each call is capped at $0.03 and the agent at 6 steps, so a signup can never cost more than $0.18. Model tokens are billed by OpenAI.\n\n### Setup\n- Needs the verified community node **n8n-nodes-looot** (built against 0.1.4): Settings > Community nodes > Install, search `looot`. [Install guide](https://docs.n8n.io/integrations/community-nodes/installation/verified-install/)\n- looot: sign up at [looot.ai](https://looot.ai), top up (from $5), create an agent token under Settings > Agent tokens, then add a **looot API** credential in n8n.\n- OpenAI and Slack credentials. Set the channel ID in **Post to Slack**.\n- Point your signup event at the production webhook URL.\n- Self-hosted n8n: set `N8N_COMMUNITY_PACKAGES_ALLOW_TOOL_USAGE=true` so the agent can use the looot node as a tool.\n\n### Customization\nChange HOT and WARM in **Score and route**. Add a HubSpot or Instantly node on the hot branch.",
+        "width": 520,
+        "height": 700
+      },
+      "id": "47314fcd-fc92-44f8-adcf-f072f2f50d9f",
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -620,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "looot/trial-signup",
+        "options": {}
+      },
+      "id": "1c0d2ef9-b3c5-43da-a76b-5c3ac440bb67",
+      "name": "New signup",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "587ad7a2-3a30-4aba-aeac-b0374a458fe4"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Read the signup\". Takes {email, name} from the webhook body and flags free mail domains.\nconst FREE = /^(gmail|googlemail|yahoo|hotmail|outlook|live|icloud|me|aol|proton|protonmail|gmx|mail|yandex|zoho)\\./i;\nconst body = $input.first().json.body || $input.first().json;\nconst email = String(body.email || \"\").trim().toLowerCase();\nconst domain = email.includes(\"@\") ? email.split(\"@\")[1] : \"\";\nreturn [{\n  json: {\n    email,\n    name: String(body.name || body.full_name || \"\").trim(),\n    domain,\n    work_email: Boolean(domain) && !FREE.test(domain),\n    received_at: new Date().toISOString(),\n  },\n}];\n"
+      },
+      "id": "36070563-8db3-4e80-a627-c0a53f9fb0ee",
+      "name": "Read the signup",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "65d70251-a779-433d-a0be-fd01861d1adf",
+              "leftValue": "={{ $json.work_email }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "f49683b3-7eed-4956-ac35-db94b0025d89",
+      "name": "Work email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=New signup: {{ $json.name }} <{{ $json.email }}>, company domain {{ $json.domain }}.",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You score new trial signups for a sales team.\nICP: B2B software companies with 20 to 2,000 employees; buyers in sales, marketing, RevOps or the founding team. Edit this line for your buyer.\n1. job:people.enrich.by-email with {\"email\": \"...\"} for name, title and LinkedIn.\n2. job:company.enrich with {\"domain\": \"...\"} for size, industry and country.\n3. job:web.scrape.markdown on https://<domain> to see what the company sells.\nfit_score 0 to 100. reason: one sentence with the facts behind the score. Never invent data.",
+          "maxIterations": 6,
+          "returnIntermediateSteps": true
+        }
+      },
+      "id": "90f06acb-ebdb-495e-abbb-65c6dbd1c656",
+      "name": "Fit scoring agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4.1-mini"
+        },
+        "options": {}
+      },
+      "id": "fd5c978d-ef26-4647-a735-0362ab7744f7",
+      "name": "OpenAI chat model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        600,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Runs one looot data call and returns the run: status, result and actualCost. Every call is capped. Use only these ids and inputs:\n- job:people.enrich.by-email, input {\"email\": \"ada@example.com\"}: the person behind an email.\n- job:company.enrich, input {\"domain\": \"example.com\"}: company size, industry, country.\n- job:web.scrape.markdown, input {\"url\": \"https://example.com\"}: one page as text.",
+        "operation": "run",
+        "endpointId": "={{ $fromAI('endpointId', 'A looot job or endpoint id from the tool description', 'string') }}",
+        "input": "={{ $fromAI('input', 'The input object, with the field names the tool description gives for that id', 'json') }}",
+        "idempotencyKey": "={{ ('n8n-' + $execution.id + '-' + $fromAI('endpointId', 'A looot job or endpoint id from the tool description', 'string') + '-' + JSON.stringify($fromAI('input', 'The input object, with the field names the tool description gives for that id', 'json'))).slice(0, 200) }}",
+        "fallback": true,
+        "maxCostUsd": 0.03,
+        "wait": 60
+      },
+      "id": "59b6a845-f894-446a-a938-f31199bdd464",
+      "name": "looot",
+      "type": "n8n-nodes-looot.loootTool",
+      "typeVersion": 1,
+      "position": [
+        740,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n  \"full_name\": \"Ada Lovelace\",\n  \"title\": \"Head of Sales\",\n  \"company\": \"Example Inc\",\n  \"company_size\": \"120 employees\",\n  \"industry\": \"Software\",\n  \"fit_score\": 82,\n  \"reason\": \"One sentence.\"\n}"
+      },
+      "id": "c06a3737-c5e7-4bef-af52-5c904187f72e",
+      "name": "Score format",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.2,
+      "position": [
+        880,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Score and route\". Turns the agent's verdict into a tier and a Slack line.\n// Shared helper: adds up what the agent's looot calls cost, from the agent's intermediate steps\n// (the agent's \"Return Intermediate Steps\" option is on). Each looot tool answer carries actualCost.\nfunction agentCost(item) {\n  const steps = (item && Array.isArray(item.intermediateSteps)) ? item.intermediateSteps : [];\n  let usd = 0;\n  let calls = 0;\n  for (const step of steps) {\n    const tool = String((step && step.action && step.action.tool) || \"\");\n    if (!/looot/i.test(tool)) continue;\n    calls += 1;\n    const text = typeof step.observation === \"string\" ? step.observation : JSON.stringify(step.observation ?? \"\");\n    for (const m of text.matchAll(/\"actualCost\"\\s*:\\s*([0-9.eE+-]+)/g)) {\n      const n = Number(m[1]);\n      if (Number.isFinite(n)) usd += n;\n    }\n  }\n  return { looot_calls: calls, looot_cost_usd: Number(usd.toFixed(6)) };\n}\n\nconst HOT = 70;\nconst WARM = 40;\nconst item = $input.first().json;\nconst signup = $(\"Read the signup\").first().json;\nconst v = (item.output && typeof item.output === \"object\") ? item.output : {};\nconst score = Math.max(0, Math.min(100, Math.round(Number(v.fit_score) || 0)));\nconst tier = score >= HOT ? \"hot\" : score >= WARM ? \"warm\" : \"cold\";\nconst cost = agentCost(item);\nconst who = [v.full_name || signup.name || signup.email, v.title, v.company].filter(Boolean).join(\", \");\nconst text = `*New ${tier} signup* (${score}/100): ${who}\\n${signup.email}${v.company_size ? ` · ${v.company_size}` : \"\"}${v.industry ? ` · ${v.industry}` : \"\"}\\n${v.reason || \"\"}\\n_data cost $${cost.looot_cost_usd.toFixed(4)}_`;\nreturn [{ json: { ...signup, ...v, fit_score: score, tier, hot: tier === \"hot\", text, ...cost } }];\n"
+      },
+      "id": "cd3d9bf7-fc86-4d6f-ae90-beac42ad2ba6",
+      "name": "Score and route",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "69ce86e9-f860-4679-a0d6-f8c8b7ed0bbe",
+              "leftValue": "={{ $json.hot }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "9e3a3a3f-86d4-477c-a0d0-9eb1bb6b4747",
+      "name": "Hot lead?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1220,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_CHANNEL_ID"
+        },
+        "text": "={{ $json.text }}",
+        "otherOptions": {
+          "mrkdwn": true
+        }
+      },
+      "id": "32c3c833-671a-4729-a35b-b15873bcea93",
+      "name": "Post to Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        1440,
+        -200
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "0fdeaf0b-47b8-4c27-ae86-1b7f1cbbf42d",
+      "name": "Not hot",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1440,
+        0
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "106541fe-2a54-43f9-a8f1-e5dc4e9929c3",
+      "name": "Free mail, skipped",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        440,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Work emails only\nFree mail stops here at $0.",
+        "width": 420,
+        "height": 380,
+        "color": 7
+      },
+      "id": "0002faa0-f698-4577-aca8-e81bfeab0e82",
+      "name": "Filter section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        160,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Look up and score\nPerson, company and homepage through one looot tool.",
+        "width": 380,
+        "height": 560,
+        "color": 7
+      },
+      "id": "b5023d4d-02a2-477c-ac19-9c08bf84fa69",
+      "name": "Agent section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        600,
+        -260
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Hot signups to Slack\n70 or more by default.",
+        "width": 600,
+        "height": 420,
+        "color": 7
+      },
+      "id": "f7ea32f3-8c31-4a86-a4c7-6e9275f070c9",
+      "name": "Route section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        980,
+        -260
+      ]
+    }
+  ],
+  "connections": {
+    "New signup": {
+      "main": [
+        [
+          {
+            "node": "Read the signup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read the signup": {
+      "main": [
+        [
+          {
+            "node": "Work email?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Work email?": {
+      "main": [
+        [
+          {
+            "node": "Fit scoring agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Free mail, skipped",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fit scoring agent": {
+      "main": [
+        [
+          {
+            "node": "Score and route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score and route": {
+      "main": [
+        [
+          {
+            "node": "Hot lead?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hot lead?": {
+      "main": [
+        [
+          {
+            "node": "Post to Slack",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Not hot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI chat model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Fit scoring agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "looot": {
+      "ai_tool": [
+        [
+          {
+            "node": "Fit scoring agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score format": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Fit scoring agent",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

@@ -1,0 +1,251 @@
+{
+  "name": "Write an SEO content brief from live Google results with one AI agent and looot into Notion",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## SEO content brief from the pages that rank today\n\n### How it works\n1. You fill in a form with a keyword and a country.\n2. One AI agent reads Google's top results and autocomplete suggestions for the keyword through looot, then reads the top 3 to 5 ranking pages.\n3. It writes a brief: search intent, a title, an H2 outline, questions to answer, related keywords, the length of the ranking pages and what they all miss.\n4. The brief becomes a Notion page.\n\nOne looot credential replaces the DataForSEO and SerpAPI accounts this flow usually needs.\n\n**Cost per brief**, from looot's public catalog on 2026-10-31: Google results $0.0009 to $0.001, autocomplete $0.00099, a page read from $0.0002. About $0.004 per brief. Each call is capped at $0.03 and the agent at 15 steps, so a brief can never cost more than $0.45. Model tokens are billed by OpenAI.\n\n### Setup\n- Needs the verified community node **n8n-nodes-looot** (built against 0.1.4): Settings > Community nodes > Install, search `looot`. [Install guide](https://docs.n8n.io/integrations/community-nodes/installation/verified-install/)\n- looot: sign up at [looot.ai](https://looot.ai), top up (from $5), create an agent token under Settings > Agent tokens, then add a **looot API** credential in n8n.\n- OpenAI and Notion credentials. A Notion database with a Name title property; set its ID in **Save to Notion**.\n- Self-hosted n8n: set `N8N_COMMUNITY_PACKAGES_ALLOW_TOOL_USAGE=true` so the agent can use the looot node as a tool.\n\n### Customization\nAdd your brand voice and product to the system message. Swap Notion for Google Docs.",
+        "width": 520,
+        "height": 640
+      },
+      "id": "d514f259-bc32-4303-a1c4-6cf6840095b0",
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -620,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "formTitle": "Write a content brief",
+        "formDescription": "Reads today's Google results for a keyword and writes a brief in Notion.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Keyword",
+              "placeholder": "email verification api",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Country",
+              "placeholder": "United States",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "9dbddce8-e7b8-4c04-a429-3cde30651231",
+      "name": "Brief form",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "ca5446a0-60ad-4c6b-a159-220392bfde40"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Keyword: {{ $json['Keyword'] }}\nCountry: {{ $json['Country'] }}",
+        "hasOutputParser": false,
+        "options": {
+          "systemMessage": "You write SEO content briefs.\n1. job:google.serp.organic with {\"query\": \"<keyword>\", \"location\": \"<country>\"}.\n2. job:google.keywords.suggestions with {\"query\": \"<keyword>\"}.\n3. Read the top 3 to 5 organic pages with job:web.scrape.markdown.\nWrite the brief in plain text under 5,000 characters: search intent, a title, an H2 outline, questions to answer, related keywords, the rough word count of the ranking pages, what they all miss, and the URLs you read.",
+          "maxIterations": 15,
+          "returnIntermediateSteps": true
+        }
+      },
+      "id": "a6f27568-d31f-48dd-ab7f-0e4b4c7bcb57",
+      "name": "SEO brief agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4.1-mini"
+        },
+        "options": {}
+      },
+      "id": "68b50ef1-4516-48e5-a1ca-66a49335132e",
+      "name": "OpenAI chat model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Runs one looot data call and returns the run: status, result and actualCost. Every call is capped. Use only these ids and inputs:\n- job:google.serp.organic, input {\"query\": \"...\", \"location\": \"United States\"}: Google organic results.\n- job:google.keywords.suggestions, input {\"query\": \"...\"}: Google autocomplete suggestions.\n- job:web.scrape.markdown, input {\"url\": \"https://...\"}: one page as text.",
+        "operation": "run",
+        "endpointId": "={{ $fromAI('endpointId', 'A looot job or endpoint id from the tool description', 'string') }}",
+        "input": "={{ $fromAI('input', 'The input object, with the field names the tool description gives for that id', 'json') }}",
+        "idempotencyKey": "={{ ('n8n-' + $execution.id + '-' + $fromAI('endpointId', 'A looot job or endpoint id from the tool description', 'string') + '-' + JSON.stringify($fromAI('input', 'The input object, with the field names the tool description gives for that id', 'json'))).slice(0, 200) }}",
+        "fallback": true,
+        "maxCostUsd": 0.03,
+        "wait": 60
+      },
+      "id": "a0c62e49-ae94-43b4-a05b-3cdcd3f4d480",
+      "name": "looot",
+      "type": "n8n-nodes-looot.loootTool",
+      "typeVersion": 1,
+      "position": [
+        360,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Brief to page\". Splits the brief into three Notion text blocks of up to 1,990 characters.\n// Shared helper: adds up what the agent's looot calls cost, from the agent's intermediate steps\n// (the agent's \"Return Intermediate Steps\" option is on). Each looot tool answer carries actualCost.\nfunction agentCost(item) {\n  const steps = (item && Array.isArray(item.intermediateSteps)) ? item.intermediateSteps : [];\n  let usd = 0;\n  let calls = 0;\n  for (const step of steps) {\n    const tool = String((step && step.action && step.action.tool) || \"\");\n    if (!/looot/i.test(tool)) continue;\n    calls += 1;\n    const text = typeof step.observation === \"string\" ? step.observation : JSON.stringify(step.observation ?? \"\");\n    for (const m of text.matchAll(/\"actualCost\"\\s*:\\s*([0-9.eE+-]+)/g)) {\n      const n = Number(m[1]);\n      if (Number.isFinite(n)) usd += n;\n    }\n  }\n  return { looot_calls: calls, looot_cost_usd: Number(usd.toFixed(6)) };\n}\n\nconst item = $input.first().json;\nconst form = $(\"Brief form\").first().json;\nconst cost = agentCost(item);\nconst text = (typeof item.output === \"string\" ? item.output : JSON.stringify(item.output ?? \"\"))\n  + `\\n\\nData cost: $${cost.looot_cost_usd.toFixed(4)} in ${cost.looot_calls} looot calls.`;\nconst parts = [];\nlet rest = text;\nwhile (rest.length && parts.length < 3) {\n  let cut = rest.length <= 1990 ? rest.length : rest.lastIndexOf(\"\\n\", 1990);\n  if (cut < 500) cut = 1990;\n  parts.push(rest.slice(0, cut));\n  rest = rest.slice(cut).replace(/^\\n+/, \"\");\n}\nwhile (parts.length < 3) parts.push(\" \");\nreturn [{ json: { title: `Brief: ${form[\"Keyword\"] || \"keyword\"}`, part1: parts[0], part2: parts[1], part3: parts[2], ...cost } }];\n"
+      },
+      "id": "d845aa29-245e-4776-a39a-904c82ffb8f3",
+      "name": "Brief to page",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "databaseId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_DATABASE_ID"
+        },
+        "title": "={{ $json.title }}",
+        "blockUi": {
+          "blockValues": [
+            {
+              "textContent": "={{ $json.part1 }}"
+            },
+            {
+              "textContent": "={{ $json.part2 }}"
+            },
+            {
+              "textContent": "={{ $json.part3 }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "6cb5d778-9be7-43fc-a65b-870fcfd5f7d0",
+      "name": "Save to Notion",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [
+        740,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Results, suggestions, pages\nThree looot jobs behind one tool.",
+        "width": 300,
+        "height": 600,
+        "color": 7
+      },
+      "id": "a8a2b959-9037-4b15-ab83-37d44ff8eebd",
+      "name": "Agent section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        200,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## One Notion page\nSplit into blocks of up to 1,990 characters.",
+        "width": 400,
+        "height": 380,
+        "color": 7
+      },
+      "id": "69145590-2563-4c77-ab8a-b76d47dc0a90",
+      "name": "Save section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        500,
+        -180
+      ]
+    }
+  ],
+  "connections": {
+    "Brief form": {
+      "main": [
+        [
+          {
+            "node": "SEO brief agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SEO brief agent": {
+      "main": [
+        [
+          {
+            "node": "Brief to page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Brief to page": {
+      "main": [
+        [
+          {
+            "node": "Save to Notion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI chat model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "SEO brief agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "looot": {
+      "ai_tool": [
+        [
+          {
+            "node": "SEO brief agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

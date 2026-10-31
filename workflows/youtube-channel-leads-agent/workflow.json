@@ -1,0 +1,294 @@
+{
+  "name": "Find YouTube channels in a niche and their verified contact emails with one AI agent and looot",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## YouTube channels in a niche to verified contacts in Google Sheets\n\n### How it works\n1. You fill in a form: a niche or keyword, how many channels and a subscriber floor.\n2. One AI agent searches YouTube through looot, reads each channel's details, and if the channel links a website, reads it for a business email.\n3. Every email it finds is verified.\n4. Each channel above the floor lands in Google Sheets with subscribers, country, website, email and email status.\n\nGood for sponsorships, partnerships and creator outreach. One looot credential replaces the Apify and ZeroBounce accounts this flow usually needs. Nothing is sent: you review the list first.\n\n**Cost per run**, from looot's public catalog on 2026-10-31: YouTube search $0.00188, channel details $0.00188, a page read from $0.0002, verify $0.00145. 10 channels cost about $0.04 in data. Each call is capped at $0.03 and the agent at 50 steps, so a run can never spend more than $1.50. Model tokens are billed by OpenAI.\n\n### Setup\n- Needs the verified community node **n8n-nodes-looot** (built against 0.1.4): Settings > Community nodes > Install, search `looot`. [Install guide](https://docs.n8n.io/integrations/community-nodes/installation/verified-install/)\n- looot: sign up at [looot.ai](https://looot.ai), top up (from $5), create an agent token under Settings > Agent tokens, then add a **looot API** credential in n8n.\n- Google Sheets and OpenAI credentials.\n- A sheet named Channels with the headers: channel_name, channel_url, subscribers, country, website, email, email_status, about, niche, found_at, run_cost_usd. Set its ID in **Save channels**.\n- Self-hosted n8n: set `N8N_COMMUNITY_PACKAGES_ALLOW_TOOL_USAGE=true` so the agent can use the looot node as a tool.\n\n### Customization\nAdd a Gmail node after **Save channels** to send a first email to valid addresses.",
+        "width": 520,
+        "height": 700
+      },
+      "id": "0e6b1f7e-5b1e-42d6-a425-f035d79cebe5",
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -620,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "formTitle": "Find YouTube channels",
+        "formDescription": "Searches YouTube, reads channel details and verifies contact emails.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Niche or keyword",
+              "placeholder": "home espresso",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "How many channels",
+              "fieldType": "number",
+              "placeholder": "10",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Minimum subscribers",
+              "fieldType": "number",
+              "placeholder": "5000"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "c867665b-a050-4205-a591-458f745ce784",
+      "name": "Channel search form",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "05ca6f24-693d-487c-aba8-48be799061f9"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Find {{ Math.min(Number($json['How many channels']) || 10, 15) }} YouTube channels about {{ $json['Niche or keyword'] }} with at least {{ Number($json['Minimum subscribers']) || 0 }} subscribers.",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You build creator outreach lists.\n1. job:youtube.search with {\"query\": \"<niche>\"}; search again with a related phrase if you need more channels.\n2. For each distinct channel: job:youtube.channel with {\"url\": \"<channel url>\"} for subscribers, country, description and links.\n3. If the description has no email but links a website, read it with job:web.scrape.markdown and look for a contact email.\n4. job:people.email.verify with {\"email\": \"...\"} for every email you found.\nNever invent an email or a subscriber count.",
+          "maxIterations": 50,
+          "returnIntermediateSteps": true
+        }
+      },
+      "id": "c51f6a83-3059-47d0-acb3-977ec5f1f255",
+      "name": "Channel finder agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4.1-mini"
+        },
+        "options": {}
+      },
+      "id": "d97622b6-193b-4949-a505-e88de5d3bd35",
+      "name": "OpenAI chat model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        180,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Runs one looot data call and returns the run: status, result and actualCost. Every call is capped. Use only these ids and inputs:\n- job:youtube.search, input {\"query\": \"...\"}: videos and channels.\n- job:youtube.channel, input {\"url\": \"https://www.youtube.com/@example\"}: channel details and links.\n- job:web.scrape.markdown, input {\"url\": \"https://...\"}: one page as text.\n- job:people.email.verify, input {\"email\": \"...\"}: deliverability.",
+        "operation": "run",
+        "endpointId": "={{ $fromAI('endpointId', 'A looot job or endpoint id from the tool description', 'string') }}",
+        "input": "={{ $fromAI('input', 'The input object, with the field names the tool description gives for that id', 'json') }}",
+        "idempotencyKey": "={{ ('n8n-' + $execution.id + '-' + $fromAI('endpointId', 'A looot job or endpoint id from the tool description', 'string') + '-' + JSON.stringify($fromAI('input', 'The input object, with the field names the tool description gives for that id', 'json'))).slice(0, 200) }}",
+        "fallback": true,
+        "maxCostUsd": 0.03,
+        "wait": 60
+      },
+      "id": "73e77584-7c58-4783-a46b-b50796bae7bb",
+      "name": "looot",
+      "type": "n8n-nodes-looot.loootTool",
+      "typeVersion": 1,
+      "position": [
+        360,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n  \"channels\": [\n    {\n      \"channel_name\": \"Example Coffee\",\n      \"channel_url\": \"https://www.youtube.com/@example\",\n      \"subscribers\": 54000,\n      \"country\": \"US\",\n      \"website\": \"https://example.com\",\n      \"email\": \"hello@example.com\",\n      \"email_status\": \"valid\",\n      \"about\": \"One line.\"\n    }\n  ]\n}"
+      },
+      "id": "0c97873e-28ad-4a62-aaf6-0ba3ca0a015f",
+      "name": "Channels format",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.2,
+      "position": [
+        540,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Channels to rows\". One row per channel, keeping the subscriber floor from the form.\n// Shared helper: adds up what the agent's looot calls cost, from the agent's intermediate steps\n// (the agent's \"Return Intermediate Steps\" option is on). Each looot tool answer carries actualCost.\nfunction agentCost(item) {\n  const steps = (item && Array.isArray(item.intermediateSteps)) ? item.intermediateSteps : [];\n  let usd = 0;\n  let calls = 0;\n  for (const step of steps) {\n    const tool = String((step && step.action && step.action.tool) || \"\");\n    if (!/looot/i.test(tool)) continue;\n    calls += 1;\n    const text = typeof step.observation === \"string\" ? step.observation : JSON.stringify(step.observation ?? \"\");\n    for (const m of text.matchAll(/\"actualCost\"\\s*:\\s*([0-9.eE+-]+)/g)) {\n      const n = Number(m[1]);\n      if (Number.isFinite(n)) usd += n;\n    }\n  }\n  return { looot_calls: calls, looot_cost_usd: Number(usd.toFixed(6)) };\n}\n\nconst item = $input.first().json;\nconst form = $(\"Channel search form\").first().json;\nconst min = Number(form[\"Minimum subscribers\"]) || 0;\nconst list = (item.output && Array.isArray(item.output.channels)) ? item.output.channels : [];\nconst cost = agentCost(item);\nconst foundAt = new Date().toISOString();\nreturn list\n  .filter((c) => c && c.channel_name && (Number(c.subscribers) || 0) >= min)\n  .map((c) => ({\n    json: {\n      channel_name: String(c.channel_name),\n      channel_url: c.channel_url || \"\",\n      subscribers: Number(c.subscribers) || \"\",\n      country: c.country || \"\",\n      website: c.website || \"\",\n      email: String(c.email || \"\").toLowerCase(),\n      email_status: c.email ? (c.email_status || \"unknown\") : \"not_found\",\n      about: String(c.about || \"\").slice(0, 300),\n      niche: form[\"Niche or keyword\"] || \"\",\n      found_at: foundAt,\n      run_cost_usd: cost.looot_cost_usd,\n    },\n  }));\n"
+      },
+      "id": "0c1c6335-5027-455e-aa83-4a6667a38bc9",
+      "name": "Channels to rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_SPREADSHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Channels"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "fef0d3f2-390a-4a7b-ac3c-2c2fb2b2aff5",
+      "name": "Save channels",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.6,
+      "position": [
+        900,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Which niche\nKeyword, count and subscriber floor.",
+        "width": 240,
+        "height": 380,
+        "color": 7
+      },
+      "id": "cfae4512-201a-467a-acbf-82d60a230c60",
+      "name": "Form section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Search, read, verify\nFour looot jobs behind one tool.",
+        "width": 440,
+        "height": 600,
+        "color": 7
+      },
+      "id": "9bceb360-3670-4d5d-a5a3-a505964a9a82",
+      "name": "Agent section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        200,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## One row per channel\nChannels under the floor are dropped.",
+        "width": 440,
+        "height": 380,
+        "color": 7
+      },
+      "id": "a8e6b948-5883-42b0-a88d-3c2c3fdd4c0c",
+      "name": "Save section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        650,
+        -180
+      ]
+    }
+  ],
+  "connections": {
+    "Channel search form": {
+      "main": [
+        [
+          {
+            "node": "Channel finder agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Channel finder agent": {
+      "main": [
+        [
+          {
+            "node": "Channels to rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Channels to rows": {
+      "main": [
+        [
+          {
+            "node": "Save channels",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI chat model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Channel finder agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "looot": {
+      "ai_tool": [
+        [
+          {
+            "node": "Channel finder agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Channels format": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Channel finder agent",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

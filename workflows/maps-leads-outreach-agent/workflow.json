@@ -1,0 +1,299 @@
+{
+  "name": "Find Google Maps leads with verified emails and a drafted opener using one AI agent and looot",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Google Maps leads with a verified email and a first line\n\n### How it works\n1. You fill in a form: a business type, a place, how many leads and what you offer.\n2. One AI agent searches Google Maps through looot, reads each business website for an email and something specific about them, and verifies the email.\n3. It drafts a two sentence opener per business from what the site says.\n4. Each business lands in Google Sheets with contact details, email status, notes from the site and the opener.\n\nOne looot credential replaces the Apify and Firecrawl accounts this flow usually needs.\n\n**Cost per run**, from looot's public catalog on 2026-10-31: Google Maps search $0.001 per call, a page read from $0.0002, verify $0.00145. 20 leads cost about $0.04 in data. Each call is capped at $0.03 and the agent at 45 steps, so a run can never spend more than $1.35. Model tokens are billed by OpenAI.\n\n### Setup\n- Needs the verified community node **n8n-nodes-looot** (built against 0.1.4): Settings > Community nodes > Install, search `looot`. [Install guide](https://docs.n8n.io/integrations/community-nodes/installation/verified-install/)\n- looot: sign up at [looot.ai](https://looot.ai), top up (from $5), create an agent token under Settings > Agent tokens, then add a **looot API** credential in n8n.\n- Google Sheets and OpenAI credentials.\n- A sheet named Leads with the headers: name, address, phone, website, email, email_status, website_notes, opener, search, found_at, run_cost_usd. Set its ID in **Save leads**.\n- Self-hosted n8n: set `N8N_COMMUNITY_PACKAGES_ALLOW_TOOL_USAGE=true` so the agent can use the looot node as a tool.\n\n### Customization\nChange the opener rule in the system message. Add an Instantly or Gmail draft node after **Save leads**.",
+        "width": 520,
+        "height": 680
+      },
+      "id": "60279c73-a17b-4198-a195-a0232c20612a",
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -620,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "formTitle": "Find local leads with an opener",
+        "formDescription": "Searches Google Maps, reads each website and verifies the email.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Business type",
+              "placeholder": "physiotherapy clinics",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "City or area",
+              "placeholder": "Manchester, UK",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "How many leads",
+              "fieldType": "number",
+              "placeholder": "15",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "What you offer, in one line",
+              "placeholder": "Online booking for clinics",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "5f7cfa64-e9ce-44cf-ad94-37f164da4446",
+      "name": "Lead search form",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "1da95137-42aa-42e0-a19e-eef3dee5da9d"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Find {{ Math.min(Number($json['How many leads']) || 10, 20) }} {{ $json['Business type'] }} in {{ $json['City or area'] }}.\nWe offer: {{ $json['What you offer, in one line'] }}",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You build local outreach lists.\n1. job:maps.local.search with {\"query\": \"<business type> in <place>\"}; add \"page\": 2 if you need more.\n2. For each business with a website: job:web.scrape.markdown on it (and the contact page if no email shows). Note one specific fact about them in website_notes.\n3. If you found an email: job:people.email.verify with {\"email\": \"...\"}.\n4. opener: two sentences under 40 words that use the fact and connect it to our offer.\nNever invent data. Skip businesses without a website.",
+          "maxIterations": 45,
+          "returnIntermediateSteps": true
+        }
+      },
+      "id": "a4d72fc9-b358-4f66-a4bc-870ce462a8c3",
+      "name": "Local outreach agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4.1-mini"
+        },
+        "options": {}
+      },
+      "id": "341d6854-97af-456b-a7ba-4bab48435113",
+      "name": "OpenAI chat model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        180,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Runs one looot data call and returns the run: status, result and actualCost. Every call is capped. Use only these ids and inputs:\n- job:maps.local.search, input {\"query\": \"dentists in Austin, Texas\", \"page\": 1}: Google Maps businesses.\n- job:web.scrape.markdown, input {\"url\": \"https://example.com\"}: one page as text.\n- job:people.email.verify, input {\"email\": \"...\"}: deliverability.",
+        "operation": "run",
+        "endpointId": "={{ $fromAI('endpointId', 'A looot job or endpoint id from the tool description', 'string') }}",
+        "input": "={{ $fromAI('input', 'The input object, with the field names the tool description gives for that id', 'json') }}",
+        "idempotencyKey": "={{ ('n8n-' + $execution.id + '-' + $fromAI('endpointId', 'A looot job or endpoint id from the tool description', 'string') + '-' + JSON.stringify($fromAI('input', 'The input object, with the field names the tool description gives for that id', 'json'))).slice(0, 200) }}",
+        "fallback": true,
+        "maxCostUsd": 0.03,
+        "wait": 60
+      },
+      "id": "3c9f6b83-8f2b-4828-a658-f3963c7b1a67",
+      "name": "looot",
+      "type": "n8n-nodes-looot.loootTool",
+      "typeVersion": 1,
+      "position": [
+        360,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n  \"leads\": [\n    {\n      \"name\": \"Example Clinic\",\n      \"address\": \"1 High St, Manchester\",\n      \"phone\": \"+44 161 555 0100\",\n      \"website\": \"https://example.com\",\n      \"email\": \"hello@example.com\",\n      \"email_status\": \"valid\",\n      \"website_notes\": \"Opened a second site in 2026.\",\n      \"opener\": \"Two sentences.\"\n    }\n  ]\n}"
+      },
+      "id": "6d60181e-a020-422e-a173-490d90618088",
+      "name": "Leads format",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.2,
+      "position": [
+        540,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Leads to rows\". One row per business, with the verified email and the drafted opener.\n// Shared helper: adds up what the agent's looot calls cost, from the agent's intermediate steps\n// (the agent's \"Return Intermediate Steps\" option is on). Each looot tool answer carries actualCost.\nfunction agentCost(item) {\n  const steps = (item && Array.isArray(item.intermediateSteps)) ? item.intermediateSteps : [];\n  let usd = 0;\n  let calls = 0;\n  for (const step of steps) {\n    const tool = String((step && step.action && step.action.tool) || \"\");\n    if (!/looot/i.test(tool)) continue;\n    calls += 1;\n    const text = typeof step.observation === \"string\" ? step.observation : JSON.stringify(step.observation ?? \"\");\n    for (const m of text.matchAll(/\"actualCost\"\\s*:\\s*([0-9.eE+-]+)/g)) {\n      const n = Number(m[1]);\n      if (Number.isFinite(n)) usd += n;\n    }\n  }\n  return { looot_calls: calls, looot_cost_usd: Number(usd.toFixed(6)) };\n}\n\nconst item = $input.first().json;\nconst form = $(\"Lead search form\").first().json;\nconst leads = (item.output && Array.isArray(item.output.leads)) ? item.output.leads : [];\nconst cost = agentCost(item);\nconst foundAt = new Date().toISOString();\nreturn leads.filter((l) => l && l.name).map((l) => ({\n  json: {\n    name: String(l.name),\n    address: l.address || \"\",\n    phone: l.phone || \"\",\n    website: l.website || \"\",\n    email: String(l.email || \"\").toLowerCase(),\n    email_status: l.email ? (l.email_status || \"unknown\") : \"not_found\",\n    website_notes: l.website_notes || \"\",\n    opener: l.opener || \"\",\n    search: `${form[\"Business type\"] || \"\"} in ${form[\"City or area\"] || \"\"}`.trim(),\n    found_at: foundAt,\n    run_cost_usd: cost.looot_cost_usd,\n  },\n}));\n"
+      },
+      "id": "5b61d6e6-e9a4-42fc-a67e-faa5ccff5d4a",
+      "name": "Leads to rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_SPREADSHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Leads"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "ed3dac03-8a56-4d11-a170-70bf96c7e4c4",
+      "name": "Save leads",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.6,
+      "position": [
+        900,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## What to find\nType, place, count and your offer.",
+        "width": 240,
+        "height": 380,
+        "color": 7
+      },
+      "id": "1305473c-db08-4eed-a678-3387eb23c5fe",
+      "name": "Form section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Maps, website, verify, draft\nThree looot jobs behind one tool.",
+        "width": 440,
+        "height": 600,
+        "color": 7
+      },
+      "id": "693fb2ee-61f0-4ec4-aa18-50dd49461481",
+      "name": "Agent section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        200,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## One row per business\nWith the email status and the opener.",
+        "width": 440,
+        "height": 380,
+        "color": 7
+      },
+      "id": "86b3546e-87be-4b06-a046-341c5d012920",
+      "name": "Save section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        650,
+        -180
+      ]
+    }
+  ],
+  "connections": {
+    "Lead search form": {
+      "main": [
+        [
+          {
+            "node": "Local outreach agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Local outreach agent": {
+      "main": [
+        [
+          {
+            "node": "Leads to rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leads to rows": {
+      "main": [
+        [
+          {
+            "node": "Save leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI chat model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Local outreach agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "looot": {
+      "ai_tool": [
+        [
+          {
+            "node": "Local outreach agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leads format": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Local outreach agent",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

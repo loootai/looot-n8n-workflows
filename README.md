@@ -8,8 +8,8 @@ n8n workflows for GTM data. Every data call goes to [looot](https://looot.ai): o
 
 There are three sets:
 
-- **One agent, one key.** Six rebuilds of popular n8n gallery templates that wire up several data providers one by one (Apify, SerpAPI, Exa, Firecrawl, Apollo, RapidAPI, Clearbit, PhantomBuster...). Each rebuild does the same job with one AI agent whose only data tool is the [verified looot node](https://n8n.io/integrations/looot/).
-- **Plain workflows on the looot node.** Six GTM jobs with no AI step.
+- **One agent, one key.** Eighteen rebuilds of popular n8n gallery templates that wire up several data providers one by one (Apify, SerpAPI, Exa, Firecrawl, Apollo, RapidAPI, Clearbit, PhantomBuster, Perplexity, Tavily...). Each rebuild does the same job with one AI agent whose only data tool is the [verified looot node](https://n8n.io/integrations/looot/).
+- **Plain workflows on the looot node.** Fourteen GTM jobs with no AI step, three of them rebuilds of gallery templates.
 - **Core nodes only.** The first four workflows, which need no community node at all.
 
 ## One agent, one key
@@ -24,6 +24,18 @@ Counts come from each workflow's JSON on 2026-10-31, sticky notes not counted. E
 | [linkedin-lead-enrichment-agent](workflows/linkedin-lead-enrichment-agent) | [LinkedIn leads with Apollo.io, LinkedIn API, Mail.so](https://n8n.io/workflows/3791) (25,900) | 56 / 7 | 3 to 4 / 1 | $1.80 |
 | [pre-call-social-brief](workflows/pre-call-social-brief) | [Social media activity of a company before a call](https://n8n.io/workflows/2125) (10,796) | 18 / 8 | 2 / 1 | $0.24 per company |
 | [post-engagers-to-hubspot](workflows/post-engagers-to-hubspot) | [HubSpot contacts from LinkedIn post interactions](https://n8n.io/workflows/1323) (7,387) | 16 / 7 | 2 / 1 | $2.40 |
+| [apollo-outreach-agent](workflows/apollo-outreach-agent) | [Automate lead generation & personalized outreach with Apollo, AI, and Instantly.ai](https://n8n.io/workflows/6983) (4,855) | 139 / 7 | 4 / 1 | $2.10 |
+| [linkedin-sheet-outreach-agent](workflows/linkedin-sheet-outreach-agent) | [Lead generation automate on LinkedIn - personalisation, enrichment](https://n8n.io/workflows/4685) (20,786) | 47 / 9 | 3 / 1 | $0.18 per row |
+| [trial-signup-scoring-agent](workflows/trial-signup-scoring-agent) | [Score and route new trial leads with Firecrawl, Scrapin.io, OpenAI, Slack and Instantly](https://n8n.io/workflows/13644) (1,285) | 48 / 12 | 2 / 1 | $0.18 per signup |
+| [content-trends-agent](workflows/content-trends-agent) | [Automated content strategy with Google Trends, News, Firecrawl & Claude AI](https://n8n.io/workflows/7372) (5,310) | 37 / 8 | 2 / 1 | $0.75 |
+| [research-report-email-agent](workflows/research-report-email-agent) | [Automated research report generation with AI, Wiki, Search & Gmail/Telegram](https://n8n.io/workflows/3579) (7,153) | 25 / 6 | 3 / 1 | $0.60 |
+| [account-brief-notion-agent](workflows/account-brief-notion-agent) | [Generate comprehensive business analysis reports with Gemini AI & Firecrawl](https://n8n.io/workflows/10391) (937) | 23 / 7 | 2 / 1 | $0.60 |
+| [maps-leads-outreach-agent](workflows/maps-leads-outreach-agent) | [Google Maps lead scraper & enrichment with AI-powered personalized outreach](https://n8n.io/workflows/6091) (5,450) | 21 / 7 | 2 / 1 | $1.35 |
+| [calendly-prep-brief-agent](workflows/calendly-prep-brief-agent) | [Pre-meeting lead research agent with Calendly, Perplexity & RapidAPI](https://n8n.io/workflows/8957) (603) | 19 / 7 | 2 / 1 | $0.24 per booking |
+| [job-postings-research-agent](workflows/job-postings-research-agent) | [Indeed job scraper with AI filtering & company research using Apify and Tavily](https://n8n.io/workflows/6076) (3,568) | 18 / 7 | 2 / 1 | $1.20 |
+| [seo-content-brief-agent](workflows/seo-content-brief-agent) | [Generate SEO content briefs with GPT-4o, DataForSEO keyword research & SERP analysis](https://n8n.io/workflows/10829) (738) | 14 / 6 | 2 / 1 | $0.45 |
+| [instagram-content-ideas-agent](workflows/instagram-content-ideas-agent) | [Automate Instagram content discovery & repurposing w/ Apify, GPT-4o & Perplexity](https://n8n.io/workflows/4658) (12,836) | 12 / 8 | 2 / 1 | $0.60 |
+| [youtube-channel-leads-agent](workflows/youtube-channel-leads-agent) | [Automated YouTube channel lead generation & email outreach with Apify and ZeroBounce](https://n8n.io/workflows/4582) (2,421) | 10 / 7 | 2 / 1 | $1.50 |
 
 The "most" column is the agent's step limit times the $0.03 cap on each looot call. A typical run costs cents; see each README.
 
@@ -37,6 +49,14 @@ The "most" column is the agent's step limit times the $0.03 cap on each looot ca
 | [hiring-signal-alert](workflows/hiring-signal-alert) | Slack alert when a target account posts RevOps, SDR or sales roles | $0.0005 per account a day |
 | [verify-before-instantly](workflows/verify-before-instantly) | Verify a sheet of emails, add only valid ones to an Instantly campaign | $0.00145 per address |
 | [hubspot-company-tech-stack](workflows/hubspot-company-tech-stack) | Write the tech stack of new HubSpot companies to a property | under a cent per company |
+| [hubspot-contact-enrichment](workflows/hubspot-contact-enrichment) | Fill job title, company and location on new HubSpot contacts from the email. Rebuild of [this template](https://n8n.io/workflows/6103), 19 nodes down to 6, 2 data accounts down to 1. | $0.0036 per contact |
+| [typeform-lead-qualifier](workflows/typeform-lead-qualifier) | Verify, enrich and score Typeform leads, upsert HubSpot, hot ones to Slack. Rebuild of [this template](https://n8n.io/workflows/10203), 2 data accounts down to 1. | $0.0034 per qualified lead |
+| [champion-job-change-alert](workflows/champion-job-change-alert) | Weekly LinkedIn check of your champions, Slack alert when one changes company | $0.0012 per champion a week |
+| [funding-news-hubspot-task](workflows/funding-news-hubspot-task) | HubSpot task when a target account announces funding in Google News | $0.001 per account a day |
+| [ai-visibility-check](workflows/ai-visibility-check) | Weekly check of whether Google's AI Overviews name or cite your brand and competitors, to Slack | $0.001 to $0.0056 per question a week |
+| [weekly-seo-rank-slack](workflows/weekly-seo-rank-slack) | Weekly Google position per keyword with the change since last week, to Slack | $0.001 per keyword a week |
+| [backlink-prospect-finder](workflows/backlink-prospect-finder) | Sites that link to your competitors but not to you, into Google Sheets | $0.024 per domain checked |
+| [webinar-attendee-enrichment](workflows/webinar-attendee-enrichment) | Title, company, LinkedIn and company size for an attendee list in Google Sheets | about $0.0055 per attendee |
 
 And a building block: [looot-agent](workflows/looot-agent) is a sub-workflow any workflow can call with a task in plain words and a cost cap. It searches the catalog, inspects the price, runs, and returns the answer with its cost.
 
@@ -109,7 +129,7 @@ What it does not do: free tiers are $0 and looot is not, so a few hundred lookup
 
 ## Edit and test
 
-The Code node sources live in [code/](code) (shared helpers in `code/_shared`) and the workflow graphs in [scripts/build.mjs](scripts/build.mjs) (core nodes) and [scripts/build-node.mjs](scripts/build-node.mjs) (looot node). The JSON files are built from them:
+The Code node sources live in [code/](code) (shared helpers in `code/_shared`) and the workflow graphs in [scripts/build.mjs](scripts/build.mjs) (core nodes), [scripts/build-node.mjs](scripts/build-node.mjs) and [scripts/build-node-more.mjs](scripts/build-node-more.mjs) (looot node, helpers in [scripts/node-kit.mjs](scripts/node-kit.mjs)). The JSON files are built from them:
 
 ```bash
 npm run build          # writes every workflows/<name>/workflow.json

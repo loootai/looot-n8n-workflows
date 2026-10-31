@@ -1,7 +1,7 @@
 {
   "name": "looot-n8n-workflows",
-  "version": "0.2.0",
-  "description": "Importable n8n workflows for GTM data on the looot API: 4 on core nodes only, 12 on the verified looot node (6 of them one-agent rebuilds of popular multi-provider templates) and a reusable looot agent sub-workflow.",
+  "version": "0.3.0",
+  "description": "Importable n8n workflows for GTM data on the looot API: 4 on core nodes only, 32 on the verified looot node (21 of them rebuilds of popular multi-provider templates) and a reusable looot agent sub-workflow.",
   "private": true,
   "type": "module",
   "scripts": {

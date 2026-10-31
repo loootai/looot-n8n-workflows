@@ -1,0 +1,458 @@
+{
+  "name": "Enrich a webinar or event attendee list in Google Sheets with title, company and LinkedIn using looot",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Enrich webinar and event attendees in Google Sheets\n\n### How it works\n1. Paste your attendee export into a sheet named Attendees with an email column, then run the workflow.\n2. It picks rows with an email and no enriched_at yet, up to 200 per run.\n3. looot looks up the person behind each email: name, job title, company and LinkedIn URL.\n4. For work emails, looot also enriches the company from the domain: industry, size and country. Free mail rows skip that step.\n5. Every row is written back, so you can sort attendees by title and company size before follow-up.\n\n**Cost per attendee**, from looot's public catalog on 2026-10-31: person from email from $0.0036, company data $0.0019. About $0.0055 for a work email, $0.0036 for free mail. Each call is capped at $0.05, and a failed call costs $0.\n\n### Setup\n- Needs the verified community node **n8n-nodes-looot** (built against 0.1.4): Settings > Community nodes > Install, search `looot`. [Install guide](https://docs.n8n.io/integrations/community-nodes/installation/verified-install/)\n- looot: sign up at [looot.ai](https://looot.ai), top up (from $5), create an agent token under Settings > Agent tokens, then add a **looot API** credential in n8n.\n- A Google Sheets credential. A sheet named Attendees with the headers: email, full_name, job_title, company, linkedin_url, industry, employees, country, looot_cost_usd, enriched_at. Set the spreadsheet ID in both Sheets nodes.\n\n### Customization\nChange MAX in **Attendees to enrich**. Add an IF after **Company fields** to send senior titles to Slack.",
+        "width": 520,
+        "height": 620
+      },
+      "id": "4c56da81-a3d8-4706-a67f-5c32979809ea",
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -620,
+        -240
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "5622355c-8d90-411c-af30-77b4a746ea1e",
+      "name": "Run it",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_SPREADSHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Attendees"
+        },
+        "options": {}
+      },
+      "id": "b4d9f078-a385-4d5f-a4d9-076edc6f48d8",
+      "name": "Read attendees",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.6,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Attendees to enrich\". Rows with an email and no enriched_at yet, at most MAX per run.\nconst MAX = 200;\nconst FREE = /^(gmail|googlemail|yahoo|hotmail|outlook|live|icloud|me|aol|proton|protonmail|gmx|mail|yandex|zoho)\\./i;\nconst out = [];\nfor (const { json: r } of $input.all()) {\n  const email = String(r.email || \"\").trim().toLowerCase();\n  if (!/^[^\\s@]+@[^\\s@]+\\.[a-z]{2,}$/.test(email) || String(r.enriched_at || \"\").trim()) continue;\n  const domain = email.split(\"@\")[1];\n  out.push({ json: { row_number: r.row_number, email, domain, work_email: !FREE.test(domain) } });\n  if (out.length >= MAX) break;\n}\nreturn out;\n"
+      },
+      "id": "f4c3707b-b5ec-4c30-a2a8-40c3846764e9",
+      "name": "Attendees to enrich",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "run",
+        "endpointId": "job:people.enrich.by-email",
+        "input": "={{ JSON.stringify({ email: $json.email }) }}",
+        "idempotencyKey": "={{ 'n8n-person-by-email:' + $json.email }}",
+        "fallback": true,
+        "maxCostUsd": 0.05,
+        "wait": 60
+      },
+      "id": "3e4d04f5-a289-45eb-a9a7-04a01060377a",
+      "name": "Look up the person",
+      "type": "n8n-nodes-looot.looot",
+      "typeVersion": 1,
+      "position": [
+        660,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Person fields\". Title, company and LinkedIn from the email. Free mail rows end here.\n// Shared helpers for reading a looot run item. The looot node returns the run as the item:\n// {runId, status, result, normalized: {fields}, actualCost, route: {servedBy}, error, topUpUrl}.\n// With \"On Error: Continue\", a refused call (402 empty balance, 400 bad input) arrives as {error: \"...\"}.\nfunction runCost(run) {\n  return run && typeof run.actualCost === \"number\" ? run.actualCost : 0;\n}\nfunction runProblem(run) {\n  if (!run || typeof run !== \"object\") return \"no answer\";\n  if (!run.status) {\n    const e = run.error;\n    if (typeof e === \"string\") return e;\n    if (e && typeof e === \"object\") return [e.code, e.message].filter(Boolean).join(\": \") || \"error\";\n    return \"error\";\n  }\n  if (run.status !== \"completed\") return (run.error && run.error.message) || run.status;\n  return null;\n}\nfunction squash(k) {\n  return String(k).toLowerCase().replace(/[\\s_\\-.]/g, \"\");\n}\n// First string or number under any of `keys`, searched a few levels deep.\nfunction find(src, keys, depth = 0) {\n  if (!src || typeof src !== \"object\" || depth > 4) return \"\";\n  if (Array.isArray(src)) {\n    for (const x of src.slice(0, 5)) { const v = find(x, keys, depth + 1); if (v) return v; }\n    return \"\";\n  }\n  for (const key of keys) {\n    for (const [k, v] of Object.entries(src)) {\n      if (squash(k) === squash(key) && (typeof v === \"string\" || typeof v === \"number\") && String(v).trim()) return String(v).trim();\n    }\n  }\n  for (const v of Object.values(src)) { const r = find(v, keys, depth + 1); if (r) return r; }\n  return \"\";\n}\n// First array (a few levels deep) that has an element passing `test`.\nfunction firstArray(src, test, depth = 0) {\n  if (!src || typeof src !== \"object\" || depth > 4) return [];\n  if (Array.isArray(src) && src.some(test)) return src;\n  for (const v of Object.values(src)) { const r = firstArray(v, test, depth + 1); if (r.length) return r; }\n  return [];\n}\nfunction runFields(run) {\n  return { n: (run && run.normalized && run.normalized.fields) || {}, r: run && run.result };\n}\nfunction findEmail(run) {\n  const re = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}/;\n  const norm = run && run.normalized && run.normalized.fields && run.normalized.fields.email;\n  if (typeof norm === \"string\" && re.test(norm)) return norm.match(re)[0].toLowerCase();\n  const m = JSON.stringify((run && run.result) ?? \"\").match(re);\n  return m ? m[0].toLowerCase() : null;\n}\n// Maps the many verifier vocabularies onto valid / invalid / catch_all / risky / unknown.\nfunction emailStatus(run) {\n  const raw = find(runFields(run), [\"status\", \"result\", \"verdict\", \"state\", \"deliverability\", \"email_status\"]).toLowerCase();\n  if (/catch.?all|accept.?all/.test(raw)) return \"catch_all\";\n  if (/^(valid|deliverable|ok|safe|verified)$/.test(raw)) return \"valid\";\n  if (/invalid|undeliverable|bounce|bad|disposable|not.?found/.test(raw)) return \"invalid\";\n  if (/risky|unknown_risky|accept/.test(raw)) return \"risky\";\n  return \"unknown\";\n}\nfunction cleanDomain(v) {\n  const s = String(v || \"\").trim().toLowerCase().replace(/^https?:\\/\\//, \"\").replace(/^www\\./, \"\").split(/[/?#]/)[0];\n  return /^[a-z0-9.-]+\\.[a-z]{2,}$/.test(s) ? s : \"\";\n}\n\nconst rows = $(\"Attendees to enrich\").all().map((i) => i.json);\nreturn $input.all().map(({ json: run }, i) => {\n  const row = rows[i] || {};\n  const problem = runProblem(run);\n  const src = runFields(run);\n  return {\n    json: {\n      row_number: row.row_number,\n      domain: row.domain,\n      work_email: Boolean(row.work_email),\n      full_name: problem ? \"\" : find(src, [\"full_name\", \"name\"]),\n      job_title: problem ? \"\" : find(src, [\"job_title\", \"jobTitle\", \"title\", \"headline\"]).slice(0, 200),\n      company: problem ? \"\" : find(src, [\"company_name\", \"companyName\", \"organization\", \"company\"]),\n      linkedin_url: problem ? \"\" : find(src, [\"linkedin_url\", \"linkedinUrl\", \"linkedin\"]),\n      industry: \"\",\n      employees: \"\",\n      country: \"\",\n      looot_cost_usd: runCost(run),\n      enriched_at: new Date().toISOString(),\n    },\n  };\n});\n"
+      },
+      "id": "d654dce0-8ba4-4733-a68b-cb89c167ec8b",
+      "name": "Person fields",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "65d70251-a779-433d-a0be-fd01861d1adf",
+              "leftValue": "={{ $json.work_email }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "0b1521ac-60a8-4140-aa8b-8da4c2ce5be9",
+      "name": "Work email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "run",
+        "endpointId": "job:company.enrich",
+        "input": "={{ JSON.stringify({ domain: $json.domain }) }}",
+        "idempotencyKey": "={{ 'n8n-company:' + $json.domain }}",
+        "fallback": true,
+        "maxCostUsd": 0.05,
+        "wait": 60
+      },
+      "id": "a68ec60b-eb86-40c6-ac2b-ee3da5b44147",
+      "name": "Enrich company",
+      "type": "n8n-nodes-looot.looot",
+      "typeVersion": 1,
+      "position": [
+        1320,
+        -100
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Company fields\". Adds industry, size and country from the email domain.\n// Shared helpers for reading a looot run item. The looot node returns the run as the item:\n// {runId, status, result, normalized: {fields}, actualCost, route: {servedBy}, error, topUpUrl}.\n// With \"On Error: Continue\", a refused call (402 empty balance, 400 bad input) arrives as {error: \"...\"}.\nfunction runCost(run) {\n  return run && typeof run.actualCost === \"number\" ? run.actualCost : 0;\n}\nfunction runProblem(run) {\n  if (!run || typeof run !== \"object\") return \"no answer\";\n  if (!run.status) {\n    const e = run.error;\n    if (typeof e === \"string\") return e;\n    if (e && typeof e === \"object\") return [e.code, e.message].filter(Boolean).join(\": \") || \"error\";\n    return \"error\";\n  }\n  if (run.status !== \"completed\") return (run.error && run.error.message) || run.status;\n  return null;\n}\nfunction squash(k) {\n  return String(k).toLowerCase().replace(/[\\s_\\-.]/g, \"\");\n}\n// First string or number under any of `keys`, searched a few levels deep.\nfunction find(src, keys, depth = 0) {\n  if (!src || typeof src !== \"object\" || depth > 4) return \"\";\n  if (Array.isArray(src)) {\n    for (const x of src.slice(0, 5)) { const v = find(x, keys, depth + 1); if (v) return v; }\n    return \"\";\n  }\n  for (const key of keys) {\n    for (const [k, v] of Object.entries(src)) {\n      if (squash(k) === squash(key) && (typeof v === \"string\" || typeof v === \"number\") && String(v).trim()) return String(v).trim();\n    }\n  }\n  for (const v of Object.values(src)) { const r = find(v, keys, depth + 1); if (r) return r; }\n  return \"\";\n}\n// First array (a few levels deep) that has an element passing `test`.\nfunction firstArray(src, test, depth = 0) {\n  if (!src || typeof src !== \"object\" || depth > 4) return [];\n  if (Array.isArray(src) && src.some(test)) return src;\n  for (const v of Object.values(src)) { const r = firstArray(v, test, depth + 1); if (r.length) return r; }\n  return [];\n}\nfunction runFields(run) {\n  return { n: (run && run.normalized && run.normalized.fields) || {}, r: run && run.result };\n}\nfunction findEmail(run) {\n  const re = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}/;\n  const norm = run && run.normalized && run.normalized.fields && run.normalized.fields.email;\n  if (typeof norm === \"string\" && re.test(norm)) return norm.match(re)[0].toLowerCase();\n  const m = JSON.stringify((run && run.result) ?? \"\").match(re);\n  return m ? m[0].toLowerCase() : null;\n}\n// Maps the many verifier vocabularies onto valid / invalid / catch_all / risky / unknown.\nfunction emailStatus(run) {\n  const raw = find(runFields(run), [\"status\", \"result\", \"verdict\", \"state\", \"deliverability\", \"email_status\"]).toLowerCase();\n  if (/catch.?all|accept.?all/.test(raw)) return \"catch_all\";\n  if (/^(valid|deliverable|ok|safe|verified)$/.test(raw)) return \"valid\";\n  if (/invalid|undeliverable|bounce|bad|disposable|not.?found/.test(raw)) return \"invalid\";\n  if (/risky|unknown_risky|accept/.test(raw)) return \"risky\";\n  return \"unknown\";\n}\nfunction cleanDomain(v) {\n  const s = String(v || \"\").trim().toLowerCase().replace(/^https?:\\/\\//, \"\").replace(/^www\\./, \"\").split(/[/?#]/)[0];\n  return /^[a-z0-9.-]+\\.[a-z]{2,}$/.test(s) ? s : \"\";\n}\n\nreturn $input.all().map(({ json: run }, i) => {\n  const p = $(\"Person fields\").itemMatching(i).json;\n  const src = runFields(run);\n  const ok = !runProblem(run);\n  return {\n    json: {\n      ...p,\n      company: p.company || (ok ? find(src, [\"name\", \"company_name\"]) : \"\"),\n      industry: ok ? find(src, [\"industry\", \"sector\"]) : \"\",\n      employees: ok ? find(src, [\"employee_count\", \"employees\", \"employeeCount\", \"size\"]) : \"\",\n      country: ok ? find(src, [\"country\", \"country_code\"]) : \"\",\n      looot_cost_usd: Number((p.looot_cost_usd + runCost(run)).toFixed(6)),\n    },\n  };\n});\n"
+      },
+      "id": "53c2d2a8-582b-4da1-ab1d-4c3946c6b795",
+      "name": "Company fields",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_SPREADSHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Attendees"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "row_number": "={{ $json.row_number }}",
+            "full_name": "={{ $json.full_name }}",
+            "job_title": "={{ $json.job_title }}",
+            "company": "={{ $json.company }}",
+            "linkedin_url": "={{ $json.linkedin_url }}",
+            "industry": "={{ $json.industry }}",
+            "employees": "={{ $json.employees }}",
+            "country": "={{ $json.country }}",
+            "looot_cost_usd": "={{ $json.looot_cost_usd }}",
+            "enriched_at": "={{ $json.enriched_at }}"
+          },
+          "matchingColumns": [
+            "row_number"
+          ],
+          "schema": [
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "readOnly": true,
+              "removed": false
+            },
+            {
+              "id": "full_name",
+              "displayName": "full_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "job_title",
+              "displayName": "job_title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "company",
+              "displayName": "company",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "linkedin_url",
+              "displayName": "linkedin_url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "industry",
+              "displayName": "industry",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "employees",
+              "displayName": "employees",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "country",
+              "displayName": "country",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "looot_cost_usd",
+              "displayName": "looot_cost_usd",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "enriched_at",
+              "displayName": "enriched_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "d5987d94-abbb-489d-a8eb-6579f2a11d49",
+      "name": "Write back",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.6,
+      "position": [
+        1760,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Pick the rows\nAn email and not enriched yet.",
+        "width": 420,
+        "height": 380,
+        "color": 7
+      },
+      "id": "be105b0d-b829-4dc5-a877-9b7767a0d5f2",
+      "name": "Read section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        160,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Person, then company\nCompany data only for work emails.",
+        "width": 1080,
+        "height": 500,
+        "color": 7
+      },
+      "id": "49a5b231-1ce5-4786-afb9-bbc9a3b4f0d5",
+      "name": "Enrich section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        600,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Write the row back\nMatched on the sheet's row number.",
+        "width": 240,
+        "height": 380,
+        "color": 7
+      },
+      "id": "3c8faec2-7213-4f12-af9a-e3793da574f4",
+      "name": "Write section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1700,
+        -180
+      ]
+    }
+  ],
+  "connections": {
+    "Run it": {
+      "main": [
+        [
+          {
+            "node": "Read attendees",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read attendees": {
+      "main": [
+        [
+          {
+            "node": "Attendees to enrich",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attendees to enrich": {
+      "main": [
+        [
+          {
+            "node": "Look up the person",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Look up the person": {
+      "main": [
+        [
+          {
+            "node": "Person fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Person fields": {
+      "main": [
+        [
+          {
+            "node": "Work email?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Work email?": {
+      "main": [
+        [
+          {
+            "node": "Enrich company",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Write back",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enrich company": {
+      "main": [
+        [
+          {
+            "node": "Company fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Company fields": {
+      "main": [
+        [
+          {
+            "node": "Write back",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

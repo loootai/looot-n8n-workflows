@@ -1,0 +1,197 @@
+{
+  "name": "Create a HubSpot task when a target account announces funding, from daily looot news searches",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## A HubSpot task for every funding announcement at your accounts\n\n### How it works\n1. Every day at 8, looot runs one Google News search per target account for funding words: raises, Series A to C, seed.\n2. **New funding news** keeps headlines that name the account and a round, and skips links it already turned into a task.\n3. Each new announcement becomes a HubSpot task on that company with the headline, the link and the source.\n\nFresh funding often means new budget and new hires. The task puts it in front of the account owner the same day.\n\nLinks already used are remembered in the workflow's static data, which n8n keeps only for active workflows.\n\n**Cost per day**, from looot's public catalog on 2026-10-31: news search $0.001 per account. 50 accounts cost $0.05 a day, about $1.50 a month. Each call is capped at $0.05.\n\n### Setup\n- Needs the verified community node **n8n-nodes-looot** (built against 0.1.4): Settings > Community nodes > Install, search `looot`. [Install guide](https://docs.n8n.io/integrations/community-nodes/installation/verified-install/)\n- looot: sign up at [looot.ai](https://looot.ai), top up (from $5), create an agent token under Settings > Agent tokens, then add a **looot API** credential in n8n.\n- A HubSpot private app token credential with CRM objects write access.\n- List your accounts and their HubSpot company IDs in **Accounts**.\n\n### Customization\nEdit the FUNDING pattern in **New funding news** to also catch acquisitions or new offices. Post to Slack as well with a Slack node after the task.",
+        "width": 520,
+        "height": 640
+      },
+      "id": "73236eb9-06c2-40a3-a495-89ef226c2440",
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -620,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 8
+            }
+          ]
+        }
+      },
+      "id": "f17192e2-94f9-409d-a479-7e51282626cb",
+      "name": "Every day at 8",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Accounts\". Your target accounts. hubspot_company_id links the task to the company.\nconst ACCOUNTS = [\n  { company: \"Acme Corp\", hubspot_company_id: \"YOUR_COMPANY_ID\" },\n  { company: \"Globex\", hubspot_company_id: \"YOUR_COMPANY_ID\" },\n];\nreturn ACCOUNTS.map((a) => ({\n  json: { ...a, query: `\"${a.company}\" (raises OR raised OR funding OR \"Series A\" OR \"Series B\" OR \"Series C\" OR seed)` },\n}));\n"
+      },
+      "id": "13335195-3f18-4aad-ac2b-f44c6975b956",
+      "name": "Accounts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "run",
+        "endpointId": "job:news.search",
+        "input": "={{ JSON.stringify({ query: $json.query }) }}",
+        "idempotencyKey": "={{ 'n8n-funding:' + $json.company + ':' + $now.toFormat('yyyy-MM-dd') }}",
+        "fallback": true,
+        "maxCostUsd": 0.05,
+        "wait": 60
+      },
+      "id": "8617a3d4-92db-412d-a0cd-77007ed64e00",
+      "name": "Search funding news",
+      "type": "n8n-nodes-looot.looot",
+      "typeVersion": 1,
+      "position": [
+        440,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"New funding news\". One HubSpot task per new funding article. Links already turned into\n// a task are remembered in the workflow's static data (active workflows only).\n// Shared helpers for reading a looot run item. The looot node returns the run as the item:\n// {runId, status, result, normalized: {fields}, actualCost, route: {servedBy}, error, topUpUrl}.\n// With \"On Error: Continue\", a refused call (402 empty balance, 400 bad input) arrives as {error: \"...\"}.\nfunction runCost(run) {\n  return run && typeof run.actualCost === \"number\" ? run.actualCost : 0;\n}\nfunction runProblem(run) {\n  if (!run || typeof run !== \"object\") return \"no answer\";\n  if (!run.status) {\n    const e = run.error;\n    if (typeof e === \"string\") return e;\n    if (e && typeof e === \"object\") return [e.code, e.message].filter(Boolean).join(\": \") || \"error\";\n    return \"error\";\n  }\n  if (run.status !== \"completed\") return (run.error && run.error.message) || run.status;\n  return null;\n}\nfunction squash(k) {\n  return String(k).toLowerCase().replace(/[\\s_\\-.]/g, \"\");\n}\n// First string or number under any of `keys`, searched a few levels deep.\nfunction find(src, keys, depth = 0) {\n  if (!src || typeof src !== \"object\" || depth > 4) return \"\";\n  if (Array.isArray(src)) {\n    for (const x of src.slice(0, 5)) { const v = find(x, keys, depth + 1); if (v) return v; }\n    return \"\";\n  }\n  for (const key of keys) {\n    for (const [k, v] of Object.entries(src)) {\n      if (squash(k) === squash(key) && (typeof v === \"string\" || typeof v === \"number\") && String(v).trim()) return String(v).trim();\n    }\n  }\n  for (const v of Object.values(src)) { const r = find(v, keys, depth + 1); if (r) return r; }\n  return \"\";\n}\n// First array (a few levels deep) that has an element passing `test`.\nfunction firstArray(src, test, depth = 0) {\n  if (!src || typeof src !== \"object\" || depth > 4) return [];\n  if (Array.isArray(src) && src.some(test)) return src;\n  for (const v of Object.values(src)) { const r = firstArray(v, test, depth + 1); if (r.length) return r; }\n  return [];\n}\nfunction runFields(run) {\n  return { n: (run && run.normalized && run.normalized.fields) || {}, r: run && run.result };\n}\nfunction findEmail(run) {\n  const re = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}/;\n  const norm = run && run.normalized && run.normalized.fields && run.normalized.fields.email;\n  if (typeof norm === \"string\" && re.test(norm)) return norm.match(re)[0].toLowerCase();\n  const m = JSON.stringify((run && run.result) ?? \"\").match(re);\n  return m ? m[0].toLowerCase() : null;\n}\n// Maps the many verifier vocabularies onto valid / invalid / catch_all / risky / unknown.\nfunction emailStatus(run) {\n  const raw = find(runFields(run), [\"status\", \"result\", \"verdict\", \"state\", \"deliverability\", \"email_status\"]).toLowerCase();\n  if (/catch.?all|accept.?all/.test(raw)) return \"catch_all\";\n  if (/^(valid|deliverable|ok|safe|verified)$/.test(raw)) return \"valid\";\n  if (/invalid|undeliverable|bounce|bad|disposable|not.?found/.test(raw)) return \"invalid\";\n  if (/risky|unknown_risky|accept/.test(raw)) return \"risky\";\n  return \"unknown\";\n}\nfunction cleanDomain(v) {\n  const s = String(v || \"\").trim().toLowerCase().replace(/^https?:\\/\\//, \"\").replace(/^www\\./, \"\").split(/[/?#]/)[0];\n  return /^[a-z0-9.-]+\\.[a-z]{2,}$/.test(s) ? s : \"\";\n}\n\nconst FUNDING = /rais(es|ed|ing)|funding|series [a-f]\\b|seed round|pre-seed|investment round|\\$\\s?\\d+(\\.\\d+)?\\s?(m|million|bn|billion)/i;\nconst accounts = $(\"Accounts\").all().map((i) => i.json);\nconst store = typeof $getWorkflowStaticData === \"function\" ? $getWorkflowStaticData(\"global\") : {};\nconst seen = new Set(Array.isArray(store.seenFunding) ? store.seenFunding : []);\nconst out = [];\n$input.all().forEach(({ json: run }, i) => {\n  const a = accounts[i] || {};\n  if (runProblem(run)) return;\n  const items = firstArray(run.result, (x) => x && typeof x === \"object\" && (x.title || x.headline));\n  for (const n of items.slice(0, 10)) {\n    const title = String(n.title || n.headline || \"\");\n    const link = n.link || n.url || \"\";\n    const first = String(a.company || \"\").toLowerCase().split(\" \")[0];\n    if (!FUNDING.test(title) || !title.toLowerCase().includes(first) || !link || seen.has(link)) continue;\n    seen.add(link);\n    out.push({\n      json: {\n        company_id: a.hubspot_company_id || \"\",\n        subject: `Funding news: ${title}`.slice(0, 250),\n        body: `${a.company} in the news: ${title}\\n${link}\\n${n.source ? `Source: ${typeof n.source === \"object\" ? n.source.name || \"\" : n.source}` : \"\"}\\nReach out while the budget is fresh.`,\n        link,\n        looot_cost_usd: runCost(run),\n      },\n    });\n    break;\n  }\n});\nstore.seenFunding = [...seen].slice(-1000);\nreturn out;\n"
+      },
+      "id": "4b72597a-fc77-4ae7-a310-a391a3be3239",
+      "name": "New funding news",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "appToken",
+        "resource": "engagement",
+        "operation": "create",
+        "type": "task",
+        "metadata": {
+          "subject": "={{ $json.subject }}",
+          "body": "={{ $json.body }}",
+          "status": "NOT_STARTED",
+          "forObjectType": "COMPANY"
+        },
+        "additionalFields": {
+          "associations": {
+            "companyIds": "={{ $json.company_id }}"
+          }
+        }
+      },
+      "id": "9123d587-8d98-4cfc-a765-23509b6afee3",
+      "name": "Create HubSpot task",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2.1,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## One news search per account\nEdit the list in Accounts.",
+        "width": 420,
+        "height": 380,
+        "color": 7
+      },
+      "id": "73a82496-ef9e-45ec-af3c-9316b65f4ae6",
+      "name": "Search section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        160,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Only new funding headlines\nOne task per account per day at most.",
+        "width": 440,
+        "height": 380,
+        "color": 7
+      },
+      "id": "6fff8a49-3047-4422-a120-d064472e96b4",
+      "name": "Task section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        600,
+        -180
+      ]
+    }
+  ],
+  "connections": {
+    "Every day at 8": {
+      "main": [
+        [
+          {
+            "node": "Accounts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Accounts": {
+      "main": [
+        [
+          {
+            "node": "Search funding news",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search funding news": {
+      "main": [
+        [
+          {
+            "node": "New funding news",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "New funding news": {
+      "main": [
+        [
+          {
+            "node": "Create HubSpot task",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

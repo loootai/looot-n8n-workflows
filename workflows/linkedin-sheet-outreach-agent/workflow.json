@@ -1,0 +1,444 @@
+{
+  "name": "Add verified emails and a personal message to LinkedIn leads in Google Sheets with one AI agent and looot",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## LinkedIn URLs in a sheet to verified emails and a personal message\n\n### How it works\n1. Every hour, the workflow reads your Leads sheet and picks up to 10 rows with a LinkedIn URL and an empty status.\n2. For each row, one AI agent reads the profile and recent posts through looot, finds the work email and verifies it.\n3. It writes a short personal message from what the person posted or does.\n4. The row gets name, title, company, email, email status, the message, a status and what the row cost.\n\nOne looot credential replaces the Apollo, RapidAPI LinkedIn and Mails.so accounts this flow usually needs.\n\n**Cost per row**, from looot's public catalog on 2026-10-31: profile $0.0012, posts $0.0015, email find from $0.0036, verify $0.00145. About $0.008 per row. Each call is capped at $0.03 and each row's agent at 6 steps, so a row can never cost more than $0.18. Model tokens are billed by OpenAI.\n\n### Setup\n- Needs the verified community node **n8n-nodes-looot** (built against 0.1.4): Settings > Community nodes > Install, search `looot`. [Install guide](https://docs.n8n.io/integrations/community-nodes/installation/verified-install/)\n- looot: sign up at [looot.ai](https://looot.ai), top up (from $5), create an agent token under Settings > Agent tokens, then add a **looot API** credential in n8n.\n- Google Sheets and OpenAI credentials.\n- A sheet named Leads with the headers: linkedin_url, company_domain, full_name, title, company, email, email_status, message, status, looot_cost_usd, checked_at. Set the spreadsheet ID in both Sheets nodes.\n- Self-hosted n8n: set `N8N_COMMUNITY_PACKAGES_ALLOW_TOOL_USAGE=true` so the agent can use the looot node as a tool.\n\n### Customization\nChange MAX_ROWS in **Rows to enrich**. Edit the message rule in the agent's system message.",
+        "width": 520,
+        "height": 720
+      },
+      "id": "0ad09b7e-1bb3-4a57-aa19-f126df1f5da4",
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -620,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours"
+            }
+          ]
+        }
+      },
+      "id": "6f34ecb5-3aba-4e8c-ada0-59794966b293",
+      "name": "Every hour",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_SPREADSHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Leads"
+        },
+        "options": {}
+      },
+      "id": "3b7a209c-fbf8-4388-ac86-0d4eb185569a",
+      "name": "Read leads",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.6,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Rows to enrich\". Rows with a LinkedIn URL and no status yet, at most MAX_ROWS per run.\nconst MAX_ROWS = 10;\nconst out = [];\nfor (const { json: r } of $input.all()) {\n  const url = String(r.linkedin_url || \"\").trim();\n  if (!/linkedin\\.com\\/in\\//i.test(url) || String(r.status || \"\").trim()) continue;\n  out.push({ json: { row_number: r.row_number, linkedin_url: url.split(\"?\")[0], company_domain: String(r.company_domain || \"\").trim().toLowerCase() } });\n  if (out.length >= MAX_ROWS) break;\n}\nreturn out;\n"
+      },
+      "id": "65f09850-5d18-4c4d-ac4b-99e176a54a1e",
+      "name": "Rows to enrich",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=LinkedIn profile: {{ $json.linkedin_url }}{{ $json.company_domain ? '\\nCompany domain: ' + $json.company_domain : '' }}",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You enrich one lead.\n1. job:linkedin.person.profile with {\"linkedin_url\": \"...\"}, then job:linkedin.person.posts with the same input.\n2. Find the company domain from the profile if it was not given, then job:people.email.find with {\"first_name\", \"last_name\", \"domain\"}.\n3. If you got an address, job:people.email.verify with {\"email\": \"...\"}.\n4. message: two sentences under 50 words that refer to a real recent post or their current role. Never invent facts.\nLeave a field empty when you did not find it.",
+          "maxIterations": 6,
+          "returnIntermediateSteps": true
+        }
+      },
+      "id": "fb18c354-4a67-43d4-a312-edb1ee4ffec7",
+      "name": "Enrich and write agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4.1-mini"
+        },
+        "options": {}
+      },
+      "id": "8f112073-0fa1-45e3-ab62-08f6f8d2b433",
+      "name": "OpenAI chat model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        600,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Runs one looot data call and returns the run: status, result and actualCost. Every call is capped. Use only these ids and inputs:\n- job:linkedin.person.profile, input {\"linkedin_url\": \"...\"}: the profile.\n- job:linkedin.person.posts, input {\"linkedin_url\": \"...\"}: recent posts.\n- job:people.email.find, input {\"first_name\": \"...\", \"last_name\": \"...\", \"domain\": \"example.com\"}: work email.\n- job:people.email.verify, input {\"email\": \"...\"}: deliverability.",
+        "operation": "run",
+        "endpointId": "={{ $fromAI('endpointId', 'A looot job or endpoint id from the tool description', 'string') }}",
+        "input": "={{ $fromAI('input', 'The input object, with the field names the tool description gives for that id', 'json') }}",
+        "idempotencyKey": "={{ ('n8n-' + $execution.id + '-' + $fromAI('endpointId', 'A looot job or endpoint id from the tool description', 'string') + '-' + JSON.stringify($fromAI('input', 'The input object, with the field names the tool description gives for that id', 'json'))).slice(0, 200) }}",
+        "fallback": true,
+        "maxCostUsd": 0.03,
+        "wait": 60
+      },
+      "id": "3af3286b-f6ab-447a-a10e-82a928b867e9",
+      "name": "looot",
+      "type": "n8n-nodes-looot.loootTool",
+      "typeVersion": 1,
+      "position": [
+        740,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n  \"full_name\": \"Ada Lovelace\",\n  \"title\": \"VP Marketing\",\n  \"company\": \"Example Inc\",\n  \"email\": \"ada@example.com\",\n  \"email_status\": \"valid\",\n  \"message\": \"Two sentences.\"\n}"
+      },
+      "id": "ac1cc69e-6152-4310-a120-5e952af379f7",
+      "name": "Lead format",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.2,
+      "position": [
+        880,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Row to write\". Pairs each agent answer with its sheet row and adds what it cost.\n// Shared helper: adds up what the agent's looot calls cost, from the agent's intermediate steps\n// (the agent's \"Return Intermediate Steps\" option is on). Each looot tool answer carries actualCost.\nfunction agentCost(item) {\n  const steps = (item && Array.isArray(item.intermediateSteps)) ? item.intermediateSteps : [];\n  let usd = 0;\n  let calls = 0;\n  for (const step of steps) {\n    const tool = String((step && step.action && step.action.tool) || \"\");\n    if (!/looot/i.test(tool)) continue;\n    calls += 1;\n    const text = typeof step.observation === \"string\" ? step.observation : JSON.stringify(step.observation ?? \"\");\n    for (const m of text.matchAll(/\"actualCost\"\\s*:\\s*([0-9.eE+-]+)/g)) {\n      const n = Number(m[1]);\n      if (Number.isFinite(n)) usd += n;\n    }\n  }\n  return { looot_calls: calls, looot_cost_usd: Number(usd.toFixed(6)) };\n}\n\nconst rows = $(\"Rows to enrich\").all().map((i) => i.json);\nreturn $input.all().map(({ json: item }, i) => {\n  const o = (item.output && typeof item.output === \"object\") ? item.output : {};\n  const cost = agentCost(item);\n  return {\n    json: {\n      row_number: rows[i] ? rows[i].row_number : null,\n      full_name: o.full_name || \"\",\n      title: o.title || \"\",\n      company: o.company || \"\",\n      email: String(o.email || \"\").toLowerCase(),\n      email_status: o.email ? (o.email_status || \"unknown\") : \"not_found\",\n      message: String(o.message || \"\").slice(0, 600),\n      status: o.full_name ? \"done\" : \"no_profile\",\n      looot_cost_usd: cost.looot_cost_usd,\n      checked_at: new Date().toISOString(),\n    },\n  };\n});\n"
+      },
+      "id": "040b1462-a54d-4afa-aabc-912ed0f1e86f",
+      "name": "Row to write",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_SPREADSHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Leads"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "row_number": "={{ $json.row_number }}",
+            "full_name": "={{ $json.full_name }}",
+            "title": "={{ $json.title }}",
+            "company": "={{ $json.company }}",
+            "email": "={{ $json.email }}",
+            "email_status": "={{ $json.email_status }}",
+            "message": "={{ $json.message }}",
+            "status": "={{ $json.status }}",
+            "looot_cost_usd": "={{ $json.looot_cost_usd }}",
+            "checked_at": "={{ $json.checked_at }}"
+          },
+          "matchingColumns": [
+            "row_number"
+          ],
+          "schema": [
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "readOnly": true,
+              "removed": false
+            },
+            {
+              "id": "full_name",
+              "displayName": "full_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "title",
+              "displayName": "title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "company",
+              "displayName": "company",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "email",
+              "displayName": "email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "email_status",
+              "displayName": "email_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "message",
+              "displayName": "message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "looot_cost_usd",
+              "displayName": "looot_cost_usd",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "checked_at",
+              "displayName": "checked_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "91e83bae-2796-4abc-ab66-fc34ef3b728a",
+      "name": "Write back",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.6,
+      "position": [
+        1220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Pick the rows\nA LinkedIn URL and no status yet, up to 10 an hour.",
+        "width": 640,
+        "height": 380,
+        "color": 7
+      },
+      "id": "b552434e-914d-4729-a748-416883ec6f56",
+      "name": "Read section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## One agent run per row\nProfile, posts, email find and verify through one looot tool.",
+        "width": 380,
+        "height": 600,
+        "color": 7
+      },
+      "id": "4700058c-4bec-4243-a3cb-996c211a3c76",
+      "name": "Agent section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        600,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Write the row back\nMatched on the sheet's row number.",
+        "width": 420,
+        "height": 380,
+        "color": 7
+      },
+      "id": "83e3d1de-54c2-4d3a-ade8-956d04ac210b",
+      "name": "Write section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        980,
+        -180
+      ]
+    }
+  ],
+  "connections": {
+    "Every hour": {
+      "main": [
+        [
+          {
+            "node": "Read leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read leads": {
+      "main": [
+        [
+          {
+            "node": "Rows to enrich",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rows to enrich": {
+      "main": [
+        [
+          {
+            "node": "Enrich and write agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enrich and write agent": {
+      "main": [
+        [
+          {
+            "node": "Row to write",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Row to write": {
+      "main": [
+        [
+          {
+            "node": "Write back",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI chat model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Enrich and write agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "looot": {
+      "ai_tool": [
+        [
+          {
+            "node": "Enrich and write agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lead format": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Enrich and write agent",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

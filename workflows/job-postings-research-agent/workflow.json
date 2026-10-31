@@ -1,0 +1,299 @@
+{
+  "name": "Find companies hiring for a role and research each one with one AI agent and looot into Google Sheets",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Job postings to researched accounts in Google Sheets\n\n### How it works\n1. You fill in a form: the job title to look for, a location, how many postings and what you sell.\n2. One AI agent searches job postings through looot, then for each hiring company finds its domain, pulls company data and reads its homepage.\n3. It says in one line why each company is worth a call, given what you sell.\n4. Each posting lands as a row in Google Sheets.\n\nA company hiring for a role you help with is a buying signal. One looot credential replaces the Apify and Tavily accounts this flow usually needs.\n\n**Cost per run**, from looot's public catalog on 2026-10-31: job search from $0.0005 per call, Google results $0.0009 to $0.001, company data $0.0019, a page read from $0.0002. 10 postings cost about $0.04 in data. Each call is capped at $0.03 and the agent at 40 steps, so a run can never spend more than $1.20. Model tokens are billed by OpenAI.\n\n### Setup\n- Needs the verified community node **n8n-nodes-looot** (built against 0.1.4): Settings > Community nodes > Install, search `looot`. [Install guide](https://docs.n8n.io/integrations/community-nodes/installation/verified-install/)\n- looot: sign up at [looot.ai](https://looot.ai), top up (from $5), create an agent token under Settings > Agent tokens, then add a **looot API** credential in n8n.\n- Google Sheets and OpenAI credentials.\n- A sheet named Postings with the headers: job_title, company, company_domain, location, job_url, company_size, industry, company_summary, why_relevant, search, found_at, cost_usd. Set its ID in **Save postings**.\n- Self-hosted n8n: set `N8N_COMMUNITY_PACKAGES_ALLOW_TOOL_USAGE=true` so the agent can use the looot node as a tool.\n\n### Customization\nAdd a filter rule to the system message, for example only companies under 500 employees.",
+        "width": 520,
+        "height": 700
+      },
+      "id": "5bf6ed02-5687-425a-a880-2b2a741ff5f7",
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -620,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "formTitle": "Find companies hiring",
+        "formDescription": "Searches job postings and researches each hiring company.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Job title",
+              "placeholder": "RevOps Manager",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Location",
+              "placeholder": "United States",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "How many postings",
+              "fieldType": "number",
+              "placeholder": "10",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "What you sell, in one line",
+              "placeholder": "CRM data cleanup",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "f8068932-e391-497c-ac6f-85c9e282de60",
+      "name": "Job search form",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "b855f58e-91fa-4300-a06d-773f05d7c91a"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Find {{ Math.min(Number($json['How many postings']) || 10, 20) }} job postings for \"{{ $json['Job title'] }}\" in {{ $json['Location'] }}, one per company.\nWe sell: {{ $json['What you sell, in one line'] }}",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You turn job postings into researched accounts.\n1. job:jobs.search with {\"query\": \"<job title>\", \"location\": \"...\", \"limit\": 25}. Keep one posting per company.\n2. For each company: job:google.serp.organic with {\"query\": \"<company> official site\"} to find the domain, then job:company.enrich with {\"domain\": \"...\"} and job:web.scrape.markdown on the homepage.\n3. company_summary: one line on what they sell. why_relevant: one line linking the posting to what we sell.\nNever invent data. Leave a field empty when unknown.",
+          "maxIterations": 40,
+          "returnIntermediateSteps": true
+        }
+      },
+      "id": "f9c41227-b616-4bc9-a208-f7b83bd5e9a1",
+      "name": "Hiring research agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4.1-mini"
+        },
+        "options": {}
+      },
+      "id": "9dbedaf0-479e-4f85-a64b-729bd238d64c",
+      "name": "OpenAI chat model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        180,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Runs one looot data call and returns the run: status, result and actualCost. Every call is capped. Use only these ids and inputs:\n- job:jobs.search, input {\"query\": \"RevOps Manager\", \"location\": \"United States\", \"limit\": 25}: job postings.\n- job:google.serp.organic, input {\"query\": \"...\"}: Google organic results.\n- job:company.enrich, input {\"domain\": \"example.com\"}: size, industry, location.\n- job:web.scrape.markdown, input {\"url\": \"https://...\"}: one page as text.",
+        "operation": "run",
+        "endpointId": "={{ $fromAI('endpointId', 'A looot job or endpoint id from the tool description', 'string') }}",
+        "input": "={{ $fromAI('input', 'The input object, with the field names the tool description gives for that id', 'json') }}",
+        "idempotencyKey": "={{ ('n8n-' + $execution.id + '-' + $fromAI('endpointId', 'A looot job or endpoint id from the tool description', 'string') + '-' + JSON.stringify($fromAI('input', 'The input object, with the field names the tool description gives for that id', 'json'))).slice(0, 200) }}",
+        "fallback": true,
+        "maxCostUsd": 0.03,
+        "wait": 60
+      },
+      "id": "1668f9d8-0956-47d8-aff9-6a5755b7191f",
+      "name": "looot",
+      "type": "n8n-nodes-looot.loootTool",
+      "typeVersion": 1,
+      "position": [
+        360,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n  \"postings\": [\n    {\n      \"job_title\": \"RevOps Manager\",\n      \"company\": \"Example Inc\",\n      \"company_domain\": \"example.com\",\n      \"location\": \"Remote, US\",\n      \"job_url\": \"https://jobs.example.com/1\",\n      \"company_size\": \"120 employees\",\n      \"industry\": \"Software\",\n      \"company_summary\": \"One line.\",\n      \"why_relevant\": \"One line.\"\n    }\n  ]\n}"
+      },
+      "id": "4fb3880e-1e3b-4e97-ac85-64ca5bb77940",
+      "name": "Postings format",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.2,
+      "position": [
+        540,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Postings to rows\". One Google Sheets row per job posting, with its company research.\n// Shared helper: adds up what the agent's looot calls cost, from the agent's intermediate steps\n// (the agent's \"Return Intermediate Steps\" option is on). Each looot tool answer carries actualCost.\nfunction agentCost(item) {\n  const steps = (item && Array.isArray(item.intermediateSteps)) ? item.intermediateSteps : [];\n  let usd = 0;\n  let calls = 0;\n  for (const step of steps) {\n    const tool = String((step && step.action && step.action.tool) || \"\");\n    if (!/looot/i.test(tool)) continue;\n    calls += 1;\n    const text = typeof step.observation === \"string\" ? step.observation : JSON.stringify(step.observation ?? \"\");\n    for (const m of text.matchAll(/\"actualCost\"\\s*:\\s*([0-9.eE+-]+)/g)) {\n      const n = Number(m[1]);\n      if (Number.isFinite(n)) usd += n;\n    }\n  }\n  return { looot_calls: calls, looot_cost_usd: Number(usd.toFixed(6)) };\n}\n\nconst item = $input.first().json;\nconst form = $(\"Job search form\").first().json;\nconst list = ((item.output && Array.isArray(item.output.postings)) ? item.output.postings : []).filter((p) => p && p.job_title && p.company);\nconst cost = agentCost(item);\nconst each = list.length ? cost.looot_cost_usd / list.length : 0;\nconst foundAt = new Date().toISOString();\nreturn list.map((p) => ({\n  json: {\n    job_title: String(p.job_title),\n    company: String(p.company),\n    company_domain: p.company_domain || \"\",\n    location: p.location || \"\",\n    job_url: p.job_url || \"\",\n    company_size: p.company_size || \"\",\n    industry: p.industry || \"\",\n    company_summary: p.company_summary || \"\",\n    why_relevant: p.why_relevant || \"\",\n    search: `${form[\"Job title\"] || \"\"} in ${form[\"Location\"] || \"\"}`.trim(),\n    found_at: foundAt,\n    cost_usd: Number(each.toFixed(6)),\n  },\n}));\n"
+      },
+      "id": "e435813d-c69e-4822-addf-2a2f9b3b7876",
+      "name": "Postings to rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_SPREADSHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Postings"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "18555203-e1e1-4a62-a6f1-81ad29227340",
+      "name": "Save postings",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.6,
+      "position": [
+        900,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Which role\nTitle, place, count and your offer.",
+        "width": 240,
+        "height": 380,
+        "color": 7
+      },
+      "id": "4b3fefc4-818a-471d-a15c-25aa54399389",
+      "name": "Form section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Postings to accounts\nFour looot jobs behind one tool.",
+        "width": 440,
+        "height": 600,
+        "color": 7
+      },
+      "id": "3352e858-e1ea-4d2d-a8a0-1fb5f30a671a",
+      "name": "Agent section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        200,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## One row per posting\nWith the company research and the reason.",
+        "width": 440,
+        "height": 380,
+        "color": 7
+      },
+      "id": "69ee37e2-d4ae-4304-addf-10d35d284aa6",
+      "name": "Save section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        650,
+        -180
+      ]
+    }
+  ],
+  "connections": {
+    "Job search form": {
+      "main": [
+        [
+          {
+            "node": "Hiring research agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hiring research agent": {
+      "main": [
+        [
+          {
+            "node": "Postings to rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postings to rows": {
+      "main": [
+        [
+          {
+            "node": "Save postings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI chat model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Hiring research agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "looot": {
+      "ai_tool": [
+        [
+          {
+            "node": "Hiring research agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postings format": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Hiring research agent",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

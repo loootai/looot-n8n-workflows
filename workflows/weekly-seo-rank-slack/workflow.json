@@ -1,0 +1,196 @@
+{
+  "name": "Post a weekly Google rank report for your keywords to Slack with looot",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Weekly Google rank report in Slack\n\n### How it works\n1. Every Monday at 8, looot runs one Google search per keyword you track, in the location you set.\n2. **Rank report** finds your domain's position in the results and compares it with last week: up, down, same, new or dropped out.\n3. One Slack message lists every keyword with its position and change, plus what the searches cost.\n\nLast week's positions are kept in the workflow's static data, which n8n keeps only for active workflows. The first run has nothing to compare with.\n\n**Cost per keyword per week**, from looot's public catalog on 2026-10-31: Google results $0.0009 to $0.001. 20 keywords cost about $0.02 a week. Each call is capped at $0.05, and a failed call costs $0.\n\n### Setup\n- Needs the verified community node **n8n-nodes-looot** (built against 0.1.4): Settings > Community nodes > Install, search `looot`. [Install guide](https://docs.n8n.io/integrations/community-nodes/installation/verified-install/)\n- looot: sign up at [looot.ai](https://looot.ai), top up (from $5), create an agent token under Settings > Agent tokens, then add a **looot API** credential in n8n.\n- A Slack credential with chat:write, and the bot invited to the channel. Set the channel ID in **Post to Slack**.\n- Set your domain, location and keywords in **Keywords**.\n\n### Customization\nRun it daily by changing the schedule. Add a second domain to watch a competitor's ranks the same way.",
+        "width": 520,
+        "height": 560
+      },
+      "id": "a404d7f1-4507-447f-ab9f-76cf19ed377e",
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -620,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "triggerAtDay": [
+                1
+              ],
+              "triggerAtHour": 8
+            }
+          ]
+        }
+      },
+      "id": "e8fd9834-ea48-49b1-a209-6a1c7cb31f7a",
+      "name": "Every Monday at 8",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Keywords\". Your domain, the keywords to track and the search location.\nconst DOMAIN = \"example.com\";\nconst LOCATION = \"United States\";\nconst KEYWORDS = [\"email finder api\", \"b2b data enrichment\", \"verify email address\"];\nreturn KEYWORDS.map((keyword) => ({ json: { domain: DOMAIN, keyword, location: LOCATION } }));\n"
+      },
+      "id": "7bd41a70-4d89-4adb-aa4f-5c6c7256821d",
+      "name": "Keywords",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "run",
+        "endpointId": "job:google.serp.organic",
+        "input": "={{ JSON.stringify({ query: $json.keyword, location: $json.location }) }}",
+        "idempotencyKey": "={{ 'n8n-rank:' + $json.keyword + ':' + $now.toFormat('kkkk-WW') }}",
+        "fallback": true,
+        "maxCostUsd": 0.05,
+        "wait": 60
+      },
+      "id": "8e1711a6-52c6-408b-a52c-c6c79e91bfdc",
+      "name": "Search Google",
+      "type": "n8n-nodes-looot.looot",
+      "typeVersion": 1,
+      "position": [
+        440,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Rank report\". One Slack message with this week's Google position per keyword and the\n// change since last week (kept in the workflow's static data, active workflows only).\n// Shared helpers for reading a looot run item. The looot node returns the run as the item:\n// {runId, status, result, normalized: {fields}, actualCost, route: {servedBy}, error, topUpUrl}.\n// With \"On Error: Continue\", a refused call (402 empty balance, 400 bad input) arrives as {error: \"...\"}.\nfunction runCost(run) {\n  return run && typeof run.actualCost === \"number\" ? run.actualCost : 0;\n}\nfunction runProblem(run) {\n  if (!run || typeof run !== \"object\") return \"no answer\";\n  if (!run.status) {\n    const e = run.error;\n    if (typeof e === \"string\") return e;\n    if (e && typeof e === \"object\") return [e.code, e.message].filter(Boolean).join(\": \") || \"error\";\n    return \"error\";\n  }\n  if (run.status !== \"completed\") return (run.error && run.error.message) || run.status;\n  return null;\n}\nfunction squash(k) {\n  return String(k).toLowerCase().replace(/[\\s_\\-.]/g, \"\");\n}\n// First string or number under any of `keys`, searched a few levels deep.\nfunction find(src, keys, depth = 0) {\n  if (!src || typeof src !== \"object\" || depth > 4) return \"\";\n  if (Array.isArray(src)) {\n    for (const x of src.slice(0, 5)) { const v = find(x, keys, depth + 1); if (v) return v; }\n    return \"\";\n  }\n  for (const key of keys) {\n    for (const [k, v] of Object.entries(src)) {\n      if (squash(k) === squash(key) && (typeof v === \"string\" || typeof v === \"number\") && String(v).trim()) return String(v).trim();\n    }\n  }\n  for (const v of Object.values(src)) { const r = find(v, keys, depth + 1); if (r) return r; }\n  return \"\";\n}\n// First array (a few levels deep) that has an element passing `test`.\nfunction firstArray(src, test, depth = 0) {\n  if (!src || typeof src !== \"object\" || depth > 4) return [];\n  if (Array.isArray(src) && src.some(test)) return src;\n  for (const v of Object.values(src)) { const r = firstArray(v, test, depth + 1); if (r.length) return r; }\n  return [];\n}\nfunction runFields(run) {\n  return { n: (run && run.normalized && run.normalized.fields) || {}, r: run && run.result };\n}\nfunction findEmail(run) {\n  const re = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}/;\n  const norm = run && run.normalized && run.normalized.fields && run.normalized.fields.email;\n  if (typeof norm === \"string\" && re.test(norm)) return norm.match(re)[0].toLowerCase();\n  const m = JSON.stringify((run && run.result) ?? \"\").match(re);\n  return m ? m[0].toLowerCase() : null;\n}\n// Maps the many verifier vocabularies onto valid / invalid / catch_all / risky / unknown.\nfunction emailStatus(run) {\n  const raw = find(runFields(run), [\"status\", \"result\", \"verdict\", \"state\", \"deliverability\", \"email_status\"]).toLowerCase();\n  if (/catch.?all|accept.?all/.test(raw)) return \"catch_all\";\n  if (/^(valid|deliverable|ok|safe|verified)$/.test(raw)) return \"valid\";\n  if (/invalid|undeliverable|bounce|bad|disposable|not.?found/.test(raw)) return \"invalid\";\n  if (/risky|unknown_risky|accept/.test(raw)) return \"risky\";\n  return \"unknown\";\n}\nfunction cleanDomain(v) {\n  const s = String(v || \"\").trim().toLowerCase().replace(/^https?:\\/\\//, \"\").replace(/^www\\./, \"\").split(/[/?#]/)[0];\n  return /^[a-z0-9.-]+\\.[a-z]{2,}$/.test(s) ? s : \"\";\n}\n\nconst reqs = $(\"Keywords\").all().map((i) => i.json);\nconst store = typeof $getWorkflowStaticData === \"function\" ? $getWorkflowStaticData(\"global\") : {};\nconst last = (store.lastPositions && typeof store.lastPositions === \"object\") ? store.lastPositions : {};\nconst host = (u) => { try { return new URL(u).hostname.replace(/^www\\./, \"\"); } catch { return \"\"; } };\nlet cost = 0;\nconst now = {};\nconst lines = $input.all().map(({ json: run }, i) => {\n  const req = reqs[i] || {};\n  cost += runCost(run);\n  if (runProblem(run)) return `• ${req.keyword}: check failed (${runProblem(run)})`;\n  const organic = firstArray(run.result, (x) => x && typeof x === \"object\" && (x.link || x.url));\n  const idx = organic.findIndex((o) => { const h = host(o.link || o.url); return h === req.domain || h.endsWith(\".\" + req.domain); });\n  const pos = idx >= 0 ? Number(organic[idx].position) || idx + 1 : null;\n  now[req.keyword] = pos;\n  const before = last[req.keyword];\n  let change = \"\";\n  if (pos && before) change = pos < before ? ` (up ${before - pos})` : pos > before ? ` (down ${pos - before})` : \" (same)\";\n  else if (pos && before === null) change = \" (new)\";\n  else if (!pos && before) change = ` (was ${before})`;\n  return `• ${req.keyword}: ${pos ? `#${pos}` : \"not in the results\"}${change}`;\n});\nstore.lastPositions = now;\nif (!lines.length) return [];\nreturn [{ json: { text: `*Weekly Google ranks for ${reqs[0].domain}* (${reqs[0].location})\\n${lines.join(\"\\n\")}\\n_${lines.length} searches, $${cost.toFixed(4)} in looot calls_`, looot_cost_usd: Number(cost.toFixed(6)) } }];\n"
+      },
+      "id": "05a19e33-94f6-4ef9-aae4-a5d7a806ceaa",
+      "name": "Rank report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_CHANNEL_ID"
+        },
+        "text": "={{ $json.text }}",
+        "otherOptions": {
+          "mrkdwn": true
+        }
+      },
+      "id": "6318ab12-028b-4962-a97f-b3a42a6b838a",
+      "name": "Post to Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## One search per keyword\nEdit domain, location and keywords.",
+        "width": 420,
+        "height": 380,
+        "color": 7
+      },
+      "id": "220212a4-db14-4f54-a42e-dff7bfe0933f",
+      "name": "Search section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        160,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Position and change\nCompared with last week's run.",
+        "width": 440,
+        "height": 380,
+        "color": 7
+      },
+      "id": "674810d2-fc55-4833-a272-78fec49e4854",
+      "name": "Report section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        600,
+        -180
+      ]
+    }
+  ],
+  "connections": {
+    "Every Monday at 8": {
+      "main": [
+        [
+          {
+            "node": "Keywords",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Keywords": {
+      "main": [
+        [
+          {
+            "node": "Search Google",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Google": {
+      "main": [
+        [
+          {
+            "node": "Rank report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rank report": {
+      "main": [
+        [
+          {
+            "node": "Post to Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

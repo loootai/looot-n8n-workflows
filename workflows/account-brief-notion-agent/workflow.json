@@ -1,0 +1,285 @@
+{
+  "name": "Turn a company domain into a full account brief in Notion with one AI agent and looot",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## A full account brief in Notion from one domain\n\n### How it works\n1. You fill in a form with a company domain and one line on what you sell.\n2. One AI agent pulls company data, reads the homepage and pricing page, checks recent news, open jobs, the tech stack and review sites, all through looot.\n3. It writes a brief: what they do, size and funding, pricing, tech stack, hiring, news, the pains you can solve and talking points, with sources.\n4. The brief becomes a Notion page.\n\nOne looot credential replaces the Firecrawl and Perplexity accounts this flow usually needs.\n\n**Cost per brief**, from looot's public catalog on 2026-10-31: company data $0.0019, news $0.001, job search from $0.0005, tech stack $0 to $0.0089, Google results $0.0009 to $0.001, a page read from $0.0002. About $0.02 per brief. Each call is capped at $0.03 and the agent at 20 steps, so a brief can never cost more than $0.60. Model tokens are billed by OpenAI.\n\n### Setup\n- Needs the verified community node **n8n-nodes-looot** (built against 0.1.4): Settings > Community nodes > Install, search `looot`. [Install guide](https://docs.n8n.io/integrations/community-nodes/installation/verified-install/)\n- looot: sign up at [looot.ai](https://looot.ai), top up (from $5), create an agent token under Settings > Agent tokens, then add a **looot API** credential in n8n.\n- OpenAI and Notion credentials. A Notion database with a Name title property; set its ID in **Save to Notion**.\n- Self-hosted n8n: set `N8N_COMMUNITY_PACKAGES_ALLOW_TOOL_USAGE=true` so the agent can use the looot node as a tool.\n\n### Customization\nChange the brief fields in **Brief format** and the system message together. Trigger it from a new HubSpot deal instead of the form.",
+        "width": 520,
+        "height": 700
+      },
+      "id": "61f553f6-8ff4-4b76-aa3d-0f8d7e28bf95",
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -620,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "formTitle": "Research an account",
+        "formDescription": "Builds a one page account brief in Notion.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Company domain",
+              "placeholder": "example.com",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "What you sell, in one line",
+              "placeholder": "Call recording for sales teams",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b7f6d897-1e6a-4d63-aeb4-aef30f6470d7",
+      "name": "Account form",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "0f796fe2-4a9b-49e2-ae1d-ce54ab708919"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Account: {{ $json['Company domain'] }}\nWe sell: {{ $json['What you sell, in one line'] }}",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You prepare account briefs for account executives.\n1. job:company.enrich with {\"domain\": \"...\"}.\n2. job:web.scrape.markdown on the homepage and the pricing page.\n3. job:news.search with {\"query\": \"\\\"<company name>\\\"\"}.\n4. job:jobs.search with {\"query\": \"<company name>\", \"company\": \"<company name>\"} for open roles.\n5. job:company.technographics with {\"domain\": \"...\"}.\n6. job:google.serp.organic with {\"query\": \"<company name> reviews\"}.\npains_we_solve and talking_points must tie a fact you found to what we sell. List every URL you used.",
+          "maxIterations": 20,
+          "returnIntermediateSteps": true
+        }
+      },
+      "id": "c663acdf-784b-484b-a934-09c1a0dc4381",
+      "name": "Account research agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4.1-mini"
+        },
+        "options": {}
+      },
+      "id": "09a08ee9-b5bd-43ed-a920-a3f0254b9ec3",
+      "name": "OpenAI chat model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        180,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Runs one looot data call and returns the run: status, result and actualCost. Every call is capped. Use only these ids and inputs:\n- job:company.enrich, input {\"domain\": \"example.com\"}: size, industry, funding, location.\n- job:web.scrape.markdown, input {\"url\": \"https://...\"}: one page as text.\n- job:news.search, input {\"query\": \"...\"}: Google News articles.\n- job:jobs.search, input {\"query\": \"...\", \"company\": \"...\"}: open job postings.\n- job:company.technographics, input {\"domain\": \"example.com\"}: technologies on the site.\n- job:google.serp.organic, input {\"query\": \"...\"}: Google organic results.",
+        "operation": "run",
+        "endpointId": "={{ $fromAI('endpointId', 'A looot job or endpoint id from the tool description', 'string') }}",
+        "input": "={{ $fromAI('input', 'The input object, with the field names the tool description gives for that id', 'json') }}",
+        "idempotencyKey": "={{ ('n8n-' + $execution.id + '-' + $fromAI('endpointId', 'A looot job or endpoint id from the tool description', 'string') + '-' + JSON.stringify($fromAI('input', 'The input object, with the field names the tool description gives for that id', 'json'))).slice(0, 200) }}",
+        "fallback": true,
+        "maxCostUsd": 0.03,
+        "wait": 60
+      },
+      "id": "d286c5ba-7fd1-492b-abd0-ab29f41a3f06",
+      "name": "looot",
+      "type": "n8n-nodes-looot.loootTool",
+      "typeVersion": 1,
+      "position": [
+        360,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n  \"name\": \"Example Inc\",\n  \"domain\": \"example.com\",\n  \"one_liner\": \"What they sell and to whom.\",\n  \"size\": \"120 employees\",\n  \"funding\": \"Series A\",\n  \"hq\": \"Austin, US\",\n  \"pricing\": \"From $49 per seat\",\n  \"tech_stack\": [\n    \"HubSpot\"\n  ],\n  \"hiring\": [\n    \"2 SDR roles\"\n  ],\n  \"recent_news\": [\n    \"2026-10: launched X\"\n  ],\n  \"pains_we_solve\": [\n    \"One line.\"\n  ],\n  \"talking_points\": [\n    \"One line.\"\n  ],\n  \"sources\": [\n    \"https://example.com/pricing\"\n  ]\n}"
+      },
+      "id": "3d5a34fd-a090-4c9c-a5af-e79e2a51918b",
+      "name": "Brief format",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.2,
+      "position": [
+        540,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node \"Brief to page\". One Notion page per account, cut to Notion's 2,000 character block.\n// Shared helper: adds up what the agent's looot calls cost, from the agent's intermediate steps\n// (the agent's \"Return Intermediate Steps\" option is on). Each looot tool answer carries actualCost.\nfunction agentCost(item) {\n  const steps = (item && Array.isArray(item.intermediateSteps)) ? item.intermediateSteps : [];\n  let usd = 0;\n  let calls = 0;\n  for (const step of steps) {\n    const tool = String((step && step.action && step.action.tool) || \"\");\n    if (!/looot/i.test(tool)) continue;\n    calls += 1;\n    const text = typeof step.observation === \"string\" ? step.observation : JSON.stringify(step.observation ?? \"\");\n    for (const m of text.matchAll(/\"actualCost\"\\s*:\\s*([0-9.eE+-]+)/g)) {\n      const n = Number(m[1]);\n      if (Number.isFinite(n)) usd += n;\n    }\n  }\n  return { looot_calls: calls, looot_cost_usd: Number(usd.toFixed(6)) };\n}\n\nconst item = $input.first().json;\nconst b = (item.output && typeof item.output === \"object\") ? item.output : {};\nconst cost = agentCost(item);\nconst list = (arr) => (Array.isArray(arr) ? arr : []).filter(Boolean).map((x) => `- ${x}`).join(\"\\n\") || \"n/a\";\nconst body = [\n  `${b.one_liner || \"n/a\"}`,\n  `Size: ${b.size || \"n/a\"}. Funding: ${b.funding || \"n/a\"}. HQ: ${b.hq || \"n/a\"}.`,\n  `Pricing: ${b.pricing || \"n/a\"}`,\n  `Tech stack: ${(Array.isArray(b.tech_stack) ? b.tech_stack : []).slice(0, 15).join(\", \") || \"n/a\"}`,\n  `Hiring:\\n${list(b.hiring)}`,\n  `Recent news:\\n${list(b.recent_news)}`,\n  `Pains we can solve:\\n${list(b.pains_we_solve)}`,\n  `Talking points:\\n${list(b.talking_points)}`,\n  `Sources:\\n${list(b.sources)}`,\n  `Data cost: $${cost.looot_cost_usd.toFixed(4)} in ${cost.looot_calls} looot calls.`,\n].join(\"\\n\\n\");\nreturn [{ json: { title: `${b.name || \"Account\"} (${b.domain || \"no domain\"})`, body: body.slice(0, 1990), ...cost } }];\n"
+      },
+      "id": "0d275e29-95f0-4af2-afd3-061c674900ed",
+      "name": "Brief to page",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "databaseId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_DATABASE_ID"
+        },
+        "title": "={{ $json.title }}",
+        "blockUi": {
+          "blockValues": [
+            {
+              "textContent": "={{ $json.body }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "882ffd2f-1617-4bd6-a12c-41480b26c902",
+      "name": "Save to Notion",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Which account\nA domain and your one line offer.",
+        "width": 240,
+        "height": 380,
+        "color": 7
+      },
+      "id": "50e6a5cd-5cfe-48ef-a00b-fc9727c7fab3",
+      "name": "Form section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Six looot jobs, one tool\nCompany, pages, news, jobs, stack and reviews.",
+        "width": 440,
+        "height": 600,
+        "color": 7
+      },
+      "id": "ecc54485-db6a-4a3f-a6da-7bea207373c3",
+      "name": "Agent section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        200,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## One Notion page\nThe page ends with what the data cost.",
+        "width": 420,
+        "height": 380,
+        "color": 7
+      },
+      "id": "d8023f09-d923-4b85-a9f9-d8297cedc83e",
+      "name": "Save section",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        650,
+        -180
+      ]
+    }
+  ],
+  "connections": {
+    "Account form": {
+      "main": [
+        [
+          {
+            "node": "Account research agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Account research agent": {
+      "main": [
+        [
+          {
+            "node": "Brief to page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Brief to page": {
+      "main": [
+        [
+          {
+            "node": "Save to Notion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI chat model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Account research agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "looot": {
+      "ai_tool": [
+        [
+          {
+            "node": "Account research agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Brief format": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Account research agent",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}
