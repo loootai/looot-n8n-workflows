@@ -4,7 +4,7 @@
 
 [![License](https://img.shields.io/github/license/loootai/looot-n8n-workflows)](LICENSE) [![Release](https://img.shields.io/github/v/release/loootai/looot-n8n-workflows)](https://github.com/loootai/looot-n8n-workflows/releases) [![Docs](https://img.shields.io/badge/docs-docs.looot.ai-12A06A)](https://docs.looot.ai)
 
-n8n workflows for GTM data. Every data call goes to [looot](https://looot.ai): one credential and one prepaid balance for 2,500+ data API endpoints from 90+ providers. A looot job run tries the next provider for the same job when one misses, inside a cost cap you set, and a failed call costs $0.
+n8n workflows for GTM data. Every data call goes to [looot](https://looot.ai): one credential and one prepaid balance for 4,200+ data API endpoints from 300+ providers. A looot job run tries the next provider for the same job when one misses, inside a cost cap you set, and a failed call costs $0.
 
 There are three sets:
 

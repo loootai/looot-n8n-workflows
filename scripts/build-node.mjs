@@ -655,7 +655,7 @@ Other workflows call this one with an **Execute Workflow** node and two inputs: 
 3. It runs it. The Run tool's cap comes from \`max_cost_usd\`, so a call above it is refused before any charge.
 4. The calling workflow gets back \`answer\`, \`looot_calls\` and \`looot_cost_usd\`.
 
-This is the pattern behind the other agent templates in this repo, without a fixed job list: one credential and one balance for 2,500+ endpoints.
+This is the pattern behind the other agent templates in this repo, without a fixed job list: one credential and one balance for 4,200+ endpoints.
 
 **Cost**: the price of each call is shown by the inspect step before the run. The agent stops at 10 steps, so a task can never spend more than 10 times \`max_cost_usd\` (default $0.05). Model tokens are billed by OpenAI.
 

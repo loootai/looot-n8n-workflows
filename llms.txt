@@ -2,7 +2,7 @@
 
 > Importable n8n workflows for GTM data on the looot API. Four on core n8n nodes only (work email, company research, signup qualifier, rank check). Thirty-three on the verified looot node: eighteen one-agent rebuilds of popular multi-provider templates (Google Maps leads, deep research, competitor research, LinkedIn lead enrichment, pre-call brief, LinkedIn post engagers to HubSpot, Apollo-style outreach to Instantly, LinkedIn sheet outreach, trial signup scoring, content trends, research report by email, account brief in Notion, Maps leads with openers, Calendly prep brief, job postings research, SEO content brief, Instagram content ideas, YouTube channel leads), fourteen plain workflows (form lead enrichment to HubSpot, work email to Sheets, competitor news to Slack, hiring signals, verify before Instantly, HubSpot tech stack, HubSpot contact enrichment, Typeform lead qualifier, champion job change alert, funding news to HubSpot task, AI visibility check, weekly rank report, backlink prospects, webinar attendee enrichment) and a reusable looot agent sub-workflow.
 
-looot is one key and one prepaid balance for 2,500+ data API endpoints from 90+ providers. Each job run falls back across providers within a cost cap; a failed call costs $0.
+looot is one key and one prepaid balance for 4,200+ data API endpoints from 300+ providers. Each job run falls back across providers within a cost cap; a failed call costs $0.
 
 ## Use
 
