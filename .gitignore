@@ -3,3 +3,6 @@ node_modules/
 .env.*
 !.env.example
 .DS_Store
+
+# Local n8n publishing kit (account-specific, may hold a token)
+n8n-publishing/
