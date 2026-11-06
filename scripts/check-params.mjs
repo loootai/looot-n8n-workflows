@@ -1,7 +1,7 @@
 // Checks that every parameter name the workflows set exists in the node's source, at a fixed n8n
 // commit (from test/n8n-node-versions.json) and in n8n-nodes-looot's source. It reads GitHub, so it
 // is not part of `npm test`. A name it cannot find is a typo or a parameter of another version.
-// Usage: node scripts/check-params.mjs
+// Usage: node scripts/check-params.mjs   (LOOOT_NODE_REF=<branch> checks another n8n-nodes-looot ref)
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 
 const root = new URL("..", import.meta.url).pathname;
@@ -32,7 +32,13 @@ async function namesFor(type) {
   if (cache.has(type)) return cache.get(type);
   let urls;
   if (type.startsWith("n8n-nodes-looot.")) {
-    urls = ["https://raw.githubusercontent.com/loootai/n8n-nodes-looot/main/nodes/Looot/Looot.node.ts"];
+    // Looot.node.ts alone before the versioned node, plus v1/ and descriptions/ after it.
+    const ref = process.env.LOOOT_NODE_REF || "main";
+    const looot = await (await fetch(`https://api.github.com/repos/loootai/n8n-nodes-looot/git/trees/${encodeURIComponent(ref)}?recursive=1`)).json();
+    if (!looot.tree) throw new Error(`n8n-nodes-looot tree ${ref}: ${looot.message}`);
+    urls = looot.tree.map((t) => t.path)
+      .filter((p) => p === "nodes/Looot/Looot.node.ts" || /^nodes\/Looot\/(v1|descriptions)\/[^/]+\.ts$/.test(p))
+      .map((p) => `https://raw.githubusercontent.com/loootai/n8n-nodes-looot/${ref}/${p}`);
   } else {
     const prefix = Object.entries(DIRS).find(([p]) => type.startsWith(p));
     const dir = prefix[1] + NODE_DIR[type] + "/";
